@@ -86,7 +86,7 @@ opt-in Ruby interoperability cases were skipped. Audit reported zero
 vulnerabilities; the specification records existing non-blocking install warnings
 and local verification limits. The registry confirms this patch release is published.
 
-## TypeScript streaming candidate
+## TypeScript streaming release
 
 `typeferry@0.14.0` adds explicit `RequestBodySizeLimit.bodyMode: "streaming"`.
 Default/buffered routes preserve their rejection behavior. Streaming routes can
@@ -106,8 +106,11 @@ The user owns manual publication due to registry authentication. The agent must
 not publish this candidate. After the clean signed implementation is prepared,
 the operator runs the existing `just publish-npm` command from the repository
 root; its authentication, immutable-version and full verification guards remain.
-The downstream consumer upgrades its manifest/lock from the registry after
-publication. Registry tarball equivalence and final consumer adoption are pending.
+The user published `0.14.0` manually. Registry `gitHead` matches signed producer
+commit `8bbb7ca`, and both package checksums match the tested candidate. The
+downstream consumer adopted the registry release in its manifest/lock and passed
+its own focused upload checks, strict/full types, lint and build. Producer tooling
+continues to verify only its generic packed consumer.
 
 ## npm Release Gate
 

@@ -1,5 +1,5 @@
 ---
-status: validating
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-09
@@ -8,7 +8,8 @@ owner: node-http-transport
 related-specs:
   - 2026-10-02-host-aware-proxy-and-http-body-ceilings.md
 implementation:
-  commits: []
+  commits:
+    - 8bbb7cae68dc4fd4f10f54b97405fe00722c3f43
 ---
 
 # Opt-in streaming HTTP request bodies
@@ -75,9 +76,12 @@ signed commits; the operator runs the existing guarded publication recipe manual
 
 ## Verification status
 
-Release candidate: `typeferry@0.14.0`, prepared for manual operator publication.
-The registry was read without authentication and reports `0.13.1` as latest;
-no package, tag, push or deployment was published by the agent.
+Released: `typeferry@0.14.0`, manually published by the user. Public registry
+metadata reports this version as latest and `gitHead` matches implementation
+commit `8bbb7cae68dc4fd4f10f54b97405fe00722c3f43`. Package SHA-1 is
+`7a71bf2c1e745b8be2aa2722a4750031d07bcea0`; both SHA-1 and SHA-512 integrity
+match the tested compiled candidate. No package, tag, push or deployment was
+published by the agent.
 
 - Acceptance 1: passed. Native unfinished requests reach handlers and can reject
   before EOF, both directly and with an optional request observer.
@@ -101,7 +105,10 @@ no package, tag, push or deployment was published by the agent.
   Lint, strict types, immutable install, build, generic packed consumer smoke and
   archive validation passed (568 allowed files). Downstream acceptance is owned
   and recorded by the consumer, never invoked from producer scripts. Manual
-  publication and registry artifact/consumer-lock validation remain external gates.
+  publication was performed by the user; registry artifact equivalence is
+  verified. The downstream consumer adopts the registry release in its manifest
+  and lock, with 89 integration and 47 unit checks, full and strict types, scoped
+  lint and build passing. Consumer evidence stays in the consumer checkout.
 
 The separate audit detected a pre-existing high-severity source-map-js issue:
 [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
@@ -125,5 +132,5 @@ mise exec -- npm pack --json --pack-destination "$candidate_dir"
 
 Review public policy/defaults -> byte/backpressure/cancellation lifecycle ->
 observer disconnect -> native compatibility cases -> release package/lock.
-Do not mark registry publication or downstream manifest adoption verified until
-those external gates execute. Keep publication guards and authentication intact.
+Registry publication, artifact equivalence and downstream manifest adoption
+are verified. Keep publication guards and authentication intact.
