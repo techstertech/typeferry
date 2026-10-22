@@ -6,7 +6,8 @@ created: 2026-10-21
 updated: 2026-10-21
 owner: typescript-runtime
 implementation:
-  commits: []
+  commits:
+    - 7568ae6e862b0ea8614594751a301e96a7020fc5
 ---
 
 # Opt-in event delivery authorization and security release
@@ -93,7 +94,7 @@ is established by local tests.
 - [x] Implement and document opt-in API and lifecycle safeguards.
 - [x] Upgrade dependencies and select candidate version.
 - [x] Verify complete package and record evidence.
-- [ ] Commit verified source and notify operator of publication readiness.
+- [x] Commit verified source and notify operator of publication readiness.
 
 The pre-implementation integration run reproduced six failures for absent live
 authorization (with the reconnect baseline already passing), and all six new
@@ -141,6 +142,23 @@ topology/load and other language implementations' optional feature parity were
 not exercised or claimed. No wire/default change requires new shared fixtures.
 The candidate remains `validating` until operator publication is recorded; this
 does not leave any failed local release check unresolved.
+
+## Candidate identity
+
+Signed implementation commit: `7568ae6e862b0ea8614594751a301e96a7020fc5`.
+The public registry availability guard confirms `0.15.0` is a new version.
+Post-commit `mise exec -- npm pack --dry-run --json` reports 568 files and
+298,135 packed bytes, with these candidate checksums:
+
+```text
+sha1: 85412f8b8242c170d2ad3f66a084afee4eb19201
+integrity: sha512-kNgUnq8VFEoh115NVHY8QDRLC0QMZtRlI5y5pXJ+NAivm0fU3uvC6KFfhX8jZxFG7g/ZKhy+BcI9IiazXdNkRg==
+```
+
+No package upload, Git push/tag, consumer dependency change, secret mutation or
+deployment was performed. Disposable release databases/containers were cleaned
+up; pre-existing services remained running. Operator publication and subsequent
+registry verification are the remaining release steps.
 
 References:
 

@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.13.1` | Published                    |
+| TypeScript     | `typeferry`                   | `0.14.0` | Published; `0.15.0` candidate verified |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -111,6 +111,35 @@ commit `8bbb7ca`, and both package checksums match the tested candidate. The
 downstream consumer adopted the registry release in its manifest/lock and passed
 its own focused upload checks, strict/full types, lint and build. Producer tooling
 continues to verify only its generic packed consumer.
+
+## TypeScript delivery authorization candidate
+
+`typeferry@0.15.0` is ready for operator publication from signed implementation
+commit `7568ae6`. It adds opt-in `EventOptions.revalidateOnDelivery`, rechecking
+live authentication, channel authorization and subscription permissions on each
+receiving instance, including Redis delivery. Denial removes only the affected
+event/channel membership. Existing defaults and wire envelopes stay unchanged.
+
+The candidate also patches the Vitest family to `4.1.12` and refreshes existing
+Hono/Vite resolutions to safe compatible releases. Audit reports zero
+vulnerabilities. The complete release gate passed 1,709 unit, 88 integration and
+10 browser checks, plus lint/types/build, the generic packed application
+consumer, and validation of 568 package files. Three existing opt-in Ruby cases
+were skipped. See the [contract, limitations and candidate checksums](specs/2026-10-21-event-delivery-authorization.md).
+
+On the current development machine, inherited Mise Go configuration can mix an
+old `GOROOT` with a newer child executable. Use the verified command-scoped
+override for the existing guarded publication recipe:
+
+```sh
+MISE_GO_SET_GOROOT=false just publish-npm
+```
+
+Node/npm remain pinned by the recipe. No global toolchain configuration or
+publication guard changed. The agent has not published or pushed this candidate;
+the operator owns registry authentication and publication. Record the registry
+version, `gitHead` and matching artifact checksums afterward before claiming it
+is published or allowing downstream registry adoption.
 
 ## npm Release Gate
 
