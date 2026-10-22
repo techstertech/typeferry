@@ -10,6 +10,14 @@ export type EventOptions = {
   protected?: boolean
 
   /**
+   * Recheck authentication, channel authorization and shouldSubscribe before
+   * each delivery, including on receiving Redis instances. Denial or a thrown
+   * predicate removes only this event/channel subscription. Defaults to false.
+   * Application predicates must read current access; decisions are not cached.
+   */
+  revalidateOnDelivery?: boolean
+
+  /**
    * Only allow user to subscribe to this event on his own channel. Automatically makes the event protected.
    */
   user?: boolean
@@ -43,6 +51,7 @@ export class Event {
   server: Server
   cluster: boolean
   excludeOriginator: boolean
+  revalidateOnDelivery: boolean
 
   shouldSubscribe: (
     client: ClientNode,
@@ -62,6 +71,7 @@ export class Event {
     this.channel = channel
 
     this.isProtected = opts?.protected ?? false
+    this.revalidateOnDelivery = opts?.revalidateOnDelivery ?? false
 
     if (opts?.user) {
       this.isProtected = true

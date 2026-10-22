@@ -22,6 +22,7 @@ import type { Event } from './event'
 import type { MethodFunction, MethodOptions } from './method'
 import { Method } from './method'
 import { ServerChannel } from './server-channel'
+import type { TypeFerrySocket } from './types'
 import {
   NodeHonoTransport,
   RedisTransport,
@@ -132,6 +133,7 @@ export class Server<
 
   methods: Map<string, Method<z.ZodType, unknown>> = new Map()
   allClients: Map<string, ClientNode> = new Map()
+  private clientsBySocket = new WeakMap<TypeFerrySocket, ClientNode>()
   /** Reverse index: userId → connected client nodes for efficient user-level operations */
   private clientsByUserId: Map<string, Set<ClientNode>> = new Map()
   channels: Map<string, ServerChannel> = new Map()
@@ -330,6 +332,15 @@ export class Server<
 
   addClient(node: ClientNode) {
     this.allClients.set(node.uuid, node)
+
+    if (node.socket) this.clientsBySocket.set(node.socket, node)
+  }
+
+  /**
+   * Resolves the live client owning a transport socket without scanning peers.
+   */
+  getClientBySocket(socket: TypeFerrySocket): ClientNode | undefined {
+    return this.clientsBySocket.get(socket)
   }
 
   deleteClient(node: ClientNode) {
@@ -337,6 +348,7 @@ export class Server<
     this.removeClientFromUserIndex(node)
 
     if (node.socket) {
+      this.clientsBySocket.delete(node.socket)
       this.webSocketTransport?.rooms?.leaveAll(node.socket)
     }
   }

@@ -833,6 +833,16 @@ Source: `src/server/event.ts:6-36,64-81`.
 | `cluster`           | Propagates via Redis pub/sub (section 2.3)                             |
 | `excludeOriginator` | When true, uses `params.uuid` to identify and exclude the emitter      |
 
+The TypeScript server additionally supports the opt-in authoring option
+`revalidateOnDelivery` (default false). It repeats current authentication,
+channel authorization and `shouldSubscribe` checks on the receiving instance
+before each delivery, including Redis fanout. False results or predicate errors
+remove only that event/channel membership. This optional server capability does
+not change the wire envelope, subscription acknowledgements, cross-language
+defaults or conformance requirements. See the
+[TypeScript event guide](docs/typescript/events-and-channels.md#recheck-access-before-delivery)
+for asynchronous ordering and revocation limits.
+
 ### 10.3 Emission
 
 `Event.handler(channel, params)` encodes:

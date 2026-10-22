@@ -80,6 +80,44 @@ export class ServerChannel extends EventEmitter2 {
 
     const roomName = getRoomName(this.channelName, event)
 
+    if (eventObject.revalidateOnDelivery) {
+      const excludeSocket = excludeUuid
+        ? server.allClients.get(excludeUuid)?.socket ?? undefined
+        : undefined
+
+      transport.rooms.broadcastAuthorized(
+        roomName,
+        payload,
+        async socket => {
+          const client = server.getClientBySocket(socket)
+          if (!client || (eventObject.isProtected && !client.authenticated)) {
+            return false
+          }
+
+          const userId = client.userId
+
+          if (!(await server.shouldAllowChannelSubscribe(client, this.channelName))) {
+            return false
+          }
+          if (!(await eventObject.shouldSubscribe(client, event, this.channelName))) {
+            return false
+          }
+
+          // Logout or event removal can happen while an application check awaits.
+          return (
+            server.events.get(event) === eventObject &&
+            client.userId === userId &&
+            (!eventObject.isProtected || client.authenticated)
+          )
+        },
+        excludeSocket,
+      ).catch(() => {
+        console.warn('[TypeFerry] Event delivery failed', event)
+      })
+
+      return
+    }
+
     if (excludeUuid) {
       const excludeClient = server.allClients.get(excludeUuid)
       transport.rooms.broadcast(roomName, payload, excludeClient?.socket ?? undefined)
