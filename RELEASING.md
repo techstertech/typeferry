@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.14.0` | Published; `0.15.0` candidate verified |
+| TypeScript     | `typeferry`                   | `0.15.0` | Published |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -112,10 +112,11 @@ downstream consumer adopted the registry release in its manifest/lock and passed
 its own focused upload checks, strict/full types, lint and build. Producer tooling
 continues to verify only its generic packed consumer.
 
-## TypeScript delivery authorization candidate
+## TypeScript delivery authorization release
 
-`typeferry@0.15.0` is ready for operator publication from signed implementation
-commit `7568ae6`. It adds opt-in `EventOptions.revalidateOnDelivery`, rechecking
+`typeferry@0.15.0` was published by the operator and verified against the public
+registry. Its `gitHead` is signed release-handoff commit `5eaf430`, containing
+implementation commit `7568ae6`. It adds opt-in `EventOptions.revalidateOnDelivery`, rechecking
 live authentication, channel authorization and subscription permissions on each
 receiving instance, including Redis delivery. Denial removes only the affected
 event/channel membership. Existing defaults and wire envelopes stay unchanged.
@@ -136,10 +137,9 @@ MISE_GO_SET_GOROOT=false just publish-npm
 ```
 
 Node/npm remain pinned by the recipe. No global toolchain configuration or
-publication guard changed. The agent has not published or pushed this candidate;
-the operator owns registry authentication and publication. Record the registry
-version, `gitHead` and matching artifact checksums afterward before claiming it
-is published or allowing downstream registry adoption.
+publication guard changed. The agent did not publish or push the release.
+Registry checksums match the verified candidate exactly; the specification
+records its full identity. Downstream registry adoption is now unblocked.
 
 ## npm Release Gate
 

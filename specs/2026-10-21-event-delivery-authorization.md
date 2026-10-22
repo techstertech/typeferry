@@ -1,5 +1,5 @@
 ---
-status: validating
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-21
@@ -140,13 +140,13 @@ the Vitest family is `4.1.12`. The existing deprecated stub
 Event removal during an awaiting predicate also denies delivery. Production
 topology/load and other language implementations' optional feature parity were
 not exercised or claimed. No wire/default change requires new shared fixtures.
-The candidate remains `validating` until operator publication is recorded; this
-does not leave any failed local release check unresolved.
+Operator publication and the subsequent registry identity verification are
+complete. All local acceptance criteria and release checks are satisfied.
 
 ## Candidate identity
 
 Signed implementation commit: `7568ae6e862b0ea8614594751a301e96a7020fc5`.
-The public registry availability guard confirms `0.15.0` is a new version.
+Before publication, the registry guard confirmed `0.15.0` was a new version.
 Post-commit `mise exec -- npm pack --dry-run --json` reports 568 files and
 298,135 packed bytes, with these candidate checksums:
 
@@ -155,10 +155,15 @@ sha1: 85412f8b8242c170d2ad3f66a084afee4eb19201
 integrity: sha512-kNgUnq8VFEoh115NVHY8QDRLC0QMZtRlI5y5pXJ+NAivm0fU3uvC6KFfhX8jZxFG7g/ZKhy+BcI9IiazXdNkRg==
 ```
 
-No package upload, Git push/tag, consumer dependency change, secret mutation or
-deployment was performed. Disposable release databases/containers were cleaned
-up; pre-existing services remained running. Operator publication and subsequent
-registry verification are the remaining release steps.
+The operator published `0.15.0`. The public registry reports `gitHead`
+`5eaf4300dc485e045e609f1b8c4cff7df1da10a2`, which contains the implementation
+commit above. Registry SHA-1 and SHA-512 integrity match the candidate values
+exactly, and the manifest reports 568 files. Downstream adoption uses this
+registry artifact; it is not a link or installed-package patch.
+
+No package upload, Git push/tag, secret mutation or deployment was performed by
+the agent. Disposable release databases/containers were cleaned up;
+pre-existing services remained running.
 
 References:
 
