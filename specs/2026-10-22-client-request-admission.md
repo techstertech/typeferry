@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-22
@@ -7,7 +7,9 @@ updated: 2026-10-23
 owner: typescript-client
 implementation:
   version: 0.15.1
-  commits: []
+  commits:
+    - 0dc25663bf1e729f4f1d4b6e7fd16d504631f9ee
+    - bd8fec6f5a00c987f9664e35c6f03c3a90600d17
 ---
 
 # Opt-in client request admission
@@ -17,8 +19,8 @@ implementation:
 An application can hold unsent RPCs during its existing authentication recovery,
 cancel obsolete work, and dispatch once with current credentials within the
 caller's timeout. TypeFerry provides the send boundary; application auth remains
-the policy owner. The user approved implementation of this public API. Publication remains a
-separate release step. It does not block independent consumer lifecycle fixes.
+the policy owner. The user approved implementation and published package 0.15.1. Its registry
+identity matches the verified compatibility candidate. It does not block independent consumer lifecycle fixes.
 
 ## Demonstrated gap
 
@@ -120,7 +122,7 @@ new dependencies, auth policy, request outbox, or general retry system changes.
 
 ## Verification status and rollback
 
-Implemented locally in TypeScript package 0.15.1. A captured context identity
+Shipped in TypeScript package 0.15.1. A captured context identity
 also prevents a late token-refresh continuation from republishing credentials
 after logout/account change or clearing a newer account after an obsolete
 terminal error. Focused production-client tests reproduced those races before
@@ -144,8 +146,8 @@ Executed with Node 24.19.0 and npm 11.17.0 from `typeferry-ts/`:
   `npm pack --dry-run --json`, and `npm audit`: passed; zero vulnerabilities.
 - `node ../scripts/verify-npm-package.mjs`: 574 allowed package files; emitted
   declarations expose the new client hook/types and caller signal.
-- `node ../scripts/verify-npm-package.mjs --check-version-available`: 0.15.1 is
-  unused and publishable; latest registry version remains 0.15.0.
+- Before publication, `node ../scripts/verify-npm-package.mjs --check-version-available`
+  confirmed 0.15.1 was unused and newer than the then-current 0.15.0 release.
 
 The native compatibility regression removes `throwIfAborted` and hides `reason`
 on the real host signal. Admission and the native HTTP adapter still complete
@@ -153,9 +155,20 @@ successfully and reject cancelled work with an AbortError fallback. The runtime
 requires abort events, not newer AbortSignal convenience APIs.
 
 Acceptance criteria 1-5 pass through the focused core tests and compatibility
-suites. No publication, push, consumer test invocation, or production check was
-performed by this package task. Diagnostic consumer validation belongs to the
-consumer repository, and final consumer validation must use a registry artifact.
+suites. On 2026-10-23, the operator published the package. Independent
+`npm view typeferry@0.15.1 version gitHead dist.integrity dist.shasum --json --registry=https://registry.npmjs.org/ --prefer-online`
+and dist-tag checks confirmed that latest is 0.15.1 and the public artifact matches
+the verified candidate exactly:
+
+- Registry `gitHead`: `bd8fec6f5a00c987f9664e35c6f03c3a90600d17`.
+- SHA-1: `6be1f676d303a456024ad60cc125c59caa8a52dd`.
+- Integrity: `sha512-WWGo6NBkbAsdkl07BZMt7OZns9+dfby2m+mSbgz8ExE54+7q6NbUrFSN2aTYVmq+8+Hsu+XHW7xScwj8m4AkDQ==`.
+- Candidate SHA-256: `d7cf4ed5c53ff3f1b4cce0be9b5adb289224c204fff646f8c94fb67bd8373af1`.
+
+The package task did not publish, push, tag, invoke consumer tests, or perform a
+production deployment. Downstream registry installation and compatibility checks
+remain owned by each consumer repository. See the
+[public registry metadata](https://registry.npmjs.org/typeferry/0.15.1).
 
 Removing the optional hook restores prior admission behavior; published consumers
 can revert their package upgrade without a data migration. Cancellation does not

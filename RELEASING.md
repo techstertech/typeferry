@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.15.0` | Published |
+| TypeScript     | `typeferry`                   | `0.15.1` | Published |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -111,6 +111,23 @@ commit `8bbb7ca`, and both package checksums match the tested candidate. The
 downstream consumer adopted the registry release in its manifest/lock and passed
 its own focused upload checks, strict/full types, lint and build. Producer tooling
 continues to verify only its generic packed consumer.
+
+## TypeScript request admission release
+
+The operator published `typeferry@0.15.1` on 2026-10-23. Independent public npm
+metadata checks confirm `latest` is 0.15.1, registry `gitHead` matches signed
+producer commit `bd8fec6`, and integrity/SHA-1 exactly match the verified candidate.
+This release adds opt-in RPC admission, bounded cancellation, credential-change
+rechecks, and protection against stale token-refresh publication. Admitted native
+HTTP also supports older WebViews without newer AbortSignal convenience methods.
+
+Verification passed 1,727 unit, 88 integration and 10 browser tests, lint,
+typecheck, immutable installation, build, package validation of 574 allowed files,
+and audit with zero vulnerabilities. Three optional Ruby cases were skipped.
+The [request admission contract](specs/2026-10-22-client-request-admission.md)
+records implementation commits, limitations, exact checksums, and registry
+verification. The agent did not publish, push, or tag the release. Consumers can
+now install the public artifact and run their own compatibility checks.
 
 ## TypeScript delivery authorization release
 
