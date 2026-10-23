@@ -3,7 +3,7 @@ status: implemented
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-10-23
 owner: typescript-client
 implementation:
   version: 0.15.1
@@ -129,7 +129,7 @@ hook resolution and dispatch without a new validation callback API.
 
 Executed with Node 24.19.0 and npm 11.17.0 from `typeferry-ts/`:
 
-- `npm run test:unit`: 138 files, 1726 tests passed, including 17 admission and
+- `npm run test:unit`: 138 files, 1727 tests passed, including 18 admission and
   refresh-race regressions. Existing unconfigured client suites remain green.
 - `TYPEFERRY_MONGODB_TEST_URI='mongodb://127.0.0.1:37017/?replicaSet=rs0&directConnection=true' TYPEFERRY_MONGODB_TEST_DB='typeferry_mongodb_admission_test' bash ../scripts/run-with-redis.sh npm run test:integration`:
   15 files and 88 tests passed; one optional Ruby file with three tests skipped
@@ -139,13 +139,18 @@ Executed with Node 24.19.0 and npm 11.17.0 from `typeferry-ts/`:
 - `npm run test:browser`: three files, ten tests passed.
 - `npm ci`: immutable install passed with zero vulnerabilities; npm reported the
   existing deprecated `@types/json-stable-stringify` stub. Focused core suites
-  (114 tests), typecheck, build, and package validation passed again afterwards.
+  (119 tests, including native HTTP), typecheck, build, and package validation passed again afterwards.
 - `npm run lint -- --fix`, `npm run typecheck`, `npm run build`,
   `npm pack --dry-run --json`, and `npm audit`: passed; zero vulnerabilities.
-- `node ../scripts/verify-npm-package.mjs`: 571 allowed package files; emitted
+- `node ../scripts/verify-npm-package.mjs`: 574 allowed package files; emitted
   declarations expose the new client hook/types and caller signal.
 - `node ../scripts/verify-npm-package.mjs --check-version-available`: 0.15.1 is
   unused and publishable; latest registry version remains 0.15.0.
+
+The native compatibility regression removes `throwIfAborted` and hides `reason`
+on the real host signal. Admission and the native HTTP adapter still complete
+successfully and reject cancelled work with an AbortError fallback. The runtime
+requires abort events, not newer AbortSignal convenience APIs.
 
 Acceptance criteria 1-5 pass through the focused core tests and compatibility
 suites. No publication, push, consumer test invocation, or production check was

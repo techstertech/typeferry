@@ -1,4 +1,5 @@
 import { EJSON } from '../ejson'
+import { throwIfAborted } from '../utils/abort'
 import {
   CLIENT_ID_HEADER_KEY,
   ClientEvents,
@@ -84,7 +85,7 @@ export class ClientHttp {
     signal?: AbortSignal,
   ) {
     try {
-      signal?.throwIfAborted()
+      throwIfAborted(signal)
       const httpFetch = this.client.options.httpFetch ?? fetch
       const data = await httpFetch(this.uri, {
         method: 'POST',
@@ -104,7 +105,7 @@ export class ClientHttp {
         }),
       })
 
-      signal?.throwIfAborted()
+      throwIfAborted(signal)
 
       if (data.status !== 200) {
         const errorText = await data.text()
@@ -136,7 +137,7 @@ export class ClientHttp {
       if (!resolve) return
 
       const response = await data.text()
-      signal?.throwIfAborted()
+      throwIfAborted(signal)
 
       const decoded = Presentation.decode<
         Presentation.Payload & { result: TResult }

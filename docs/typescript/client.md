@@ -61,6 +61,10 @@ Default RPC retries remain zero; request retries only when the method is safe to
 repeat. Arbitrary `Client.fetch()` and direct application HTTP calls are outside
 this RPC admission boundary.
 
+Admission and native HTTP cancellation use abort events and tolerate older
+WebViews without `AbortSignal.reason` or `throwIfAborted`; newer static
+`AbortSignal.any` and `AbortSignal.timeout` helpers are not required.
+
 Clients without admission or a caller signal retain their existing lifecycle.
 Token refresh also refuses to publish credentials or clear a newer session when
 the client context changes while its refresh response is outstanding.

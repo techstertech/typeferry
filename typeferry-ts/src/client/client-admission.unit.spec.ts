@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CallOptions } from '../utils'
 import { ClientEvents, TOKEN_HEADER_KEY } from '../utils'
 import { refreshAccessToken } from '../auth/client/token-refresh'
+import { createNativeHttpFetch } from '../auth/client/native-http'
 import { Client } from './client'
 
 vi.mock('./client-socket', () => ({
@@ -243,6 +244,35 @@ describe('opt-in request admission', () => {
 
     await expect(refreshAccessToken(client, { broadcastChannelName: '' })).rejects.toBeDefined()
     expect(client.context.token).toBe('new-account')
+  })
+
+  it('supports older abort signals without throwIfAborted or reason in native HTTP', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'throwIfAborted')
+    if (!descriptor) throw new Error('Expected the host AbortSignal method to stub')
+    Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', { ...descriptor, value: undefined })
+    vi.spyOn(AbortSignal.prototype, 'reason', 'get').mockReturnValue(undefined)
+    const controller = new AbortController()
+    const bridge = {
+      request: vi.fn().mockResolvedValue({
+        status: 200, statusText: 'OK', headers: {}, body: '{"result":"ok"}',
+      }),
+    }
+    client.options.httpFetch = createNativeHttpFetch(bridge)
+    client.options.beforeDispatch = () => undefined
+
+    try {
+      await expect(client.call('private.write', {}, { http: true })).resolves.toBe('ok')
+      const ready = deferred<void>()
+      client.options.beforeDispatch = () => ready.promise
+      const request = client.call('private.write', {}, { signal: controller.signal })
+      const cancelled = expect(request).rejects.toMatchObject({ name: 'AbortError' })
+      controller.abort()
+      await cancelled
+      ready.resolve()
+      expect(bridge.request).toHaveBeenCalledOnce()
+    } finally {
+      Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', descriptor)
+    }
   })
 
   it('settles admitted HTTP void sends without expecting an RPC result', async () => {

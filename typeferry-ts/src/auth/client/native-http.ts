@@ -1,4 +1,5 @@
 import type { HttpFetch } from '../../client/backend-origin'
+import { throwIfAborted } from '../../utils/abort'
 
 /**
  * Text-only native transport. Its implementation must pin the backend origin,
@@ -20,7 +21,7 @@ export interface NativeHttpBridge {
  */
 export function createNativeHttpFetch(bridge: NativeHttpBridge): HttpFetch {
   return async (url, options = {}) => {
-    options.signal?.throwIfAborted()
+    throwIfAborted(options.signal)
 
     if (options.body != null && typeof options.body !== 'string') {
       throw new Error('Native HTTP adapter supports text request bodies only')
@@ -29,7 +30,7 @@ export function createNativeHttpFetch(bridge: NativeHttpBridge): HttpFetch {
     const headers = Object.fromEntries(new Headers(options.headers).entries())
     const result = await bridge.request({ url, method: options.method ?? 'GET', headers, ...(typeof options.body === 'string' ? { body: options.body } : {}) })
 
-    options.signal?.throwIfAborted()
+    throwIfAborted(options.signal)
 
     const body = [204, 205, 304].includes(result.status) ? null : result.body
 

@@ -1,3 +1,5 @@
+import { getAbortReason, throwIfAborted } from '../utils/abort'
+
 /**
  * Owns one opt-in request's deadline and cancellation through its completion.
  * Admission policy remains with the application; late waits cannot revive work.
@@ -27,24 +29,24 @@ export class RequestLifetime {
     if (this.followed.has(signal)) return
     this.followed.add(signal)
     if (signal.aborted) {
-      this.cancel(signal.reason)
+      this.cancel(getAbortReason(signal))
       return
     }
-    const abort = (): void => this.cancel(signal.reason)
+    const abort = (): void => this.cancel(getAbortReason(signal))
     signal.addEventListener('abort', abort, { once: true })
     this.cleanups.push(() => signal.removeEventListener('abort', abort))
   }
 
   remaining(): number {
     if (Date.now() >= this.deadline) this.cancel(new Error('TypeFerry: Request timed out'))
-    this.signal.throwIfAborted()
+    throwIfAborted(this.signal)
     return this.deadline - Date.now()
   }
 
   async wait<T>(operation: PromiseLike<T> | T): Promise<T> {
     let abort: (() => void) | undefined
     const cancelled = new Promise<never>((_resolve, reject) => {
-      abort = (): void => reject(this.signal.reason)
+      abort = (): void => reject(getAbortReason(this.signal))
       if (this.signal.aborted) abort()
       else this.signal.addEventListener('abort', abort, { once: true })
     })

@@ -3,6 +3,7 @@
 ## 2026-10-22
 
 - feat(client): add opt-in bounded RPC admission and cancellation
+- fix(client): support cancellation on older native WebViews
 - fix(auth): prevent obsolete refresh results from replacing a newer session
 
 ## 2026-10-21
