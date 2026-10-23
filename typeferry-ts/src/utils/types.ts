@@ -28,6 +28,10 @@ type ServerMethodNode = {
 export type MethodParams<T = any> = T
 
 export type CallOptions = {
+  /**
+   * Cancels local waiting and delivery; a sent operation may still run remotely.
+   */
+  signal?: AbortSignal
   http?: boolean
   timeout?: number
   httpFallback?: boolean

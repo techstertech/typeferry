@@ -81,11 +81,14 @@ export class ClientHttp {
     payload: Record<string, unknown>,
     resolve: Resolve<TResult> | null,
     reject: Reject,
+    signal?: AbortSignal,
   ) {
     try {
+      signal?.throwIfAborted()
       const httpFetch = this.client.options.httpFetch ?? fetch
       const data = await httpFetch(this.uri, {
         method: 'POST',
+        ...(signal ? { signal } : {}),
         headers: {
           [CLIENT_ID_HEADER_KEY]: this.client.uuid,
           Accept: 'text/plain, */*',
@@ -100,6 +103,8 @@ export class ClientHttp {
           payload,
         }),
       })
+
+      signal?.throwIfAborted()
 
       if (data.status !== 200) {
         const errorText = await data.text()
@@ -124,11 +129,14 @@ export class ClientHttp {
         return reject(error)
       }
 
-      if (!resolve) {
+      if (payload.void) {
+        resolve?.(undefined as TResult)
         return
       }
+      if (!resolve) return
 
       const response = await data.text()
+      signal?.throwIfAborted()
 
       const decoded = Presentation.decode<
         Presentation.Payload & { result: TResult }

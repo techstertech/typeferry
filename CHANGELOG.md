@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-22
+
+- feat(client): add opt-in bounded RPC admission and cancellation
+- fix(auth): prevent obsolete refresh results from replacing a newer session
+
 ## 2026-10-21
 
 - feat(server): revalidate event permissions before delivery

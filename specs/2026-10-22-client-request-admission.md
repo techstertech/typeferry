@@ -1,11 +1,12 @@
 ---
-status: proposed
+status: implemented
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-22
 updated: 2026-10-22
 owner: typescript-client
 implementation:
+  version: 0.15.1
   commits: []
 ---
 
@@ -16,8 +17,8 @@ implementation:
 An application can hold unsent RPCs during its existing authentication recovery,
 cancel obsolete work, and dispatch once with current credentials within the
 caller's timeout. TypeFerry provides the send boundary; application auth remains
-the policy owner. This public API proposal requires approval before implementation
-or release. It does not block independent consumer lifecycle fixes.
+the policy owner. The user approved implementation of this public API. Publication remains a
+separate release step. It does not block independent consumer lifecycle fixes.
 
 ## Demonstrated gap
 
@@ -39,10 +40,11 @@ failed while the existing 50 tests passed. The probes were removed afterwards.
 
 ## Proposed public surface
 
-Names and semantics below are proposed, not implemented:
+The approved additive surface:
 
 ```typescript
 export type DispatchRequest = {
+  readonly client: Client
   readonly method: string
   readonly kind: 'call' | 'void'
   readonly deadline: number
@@ -76,7 +78,10 @@ when its captured session ends. No framework session generation is introduced.
 - Opt-in only: clients without the hook retain current behavior. `signal` is
   additive. Configuring admission opts into one total timeout budget across
   admission, initialization, dispatch, and response, including HTTP fallback.
-- Invoke once per logical request before payload/context capture. A hook must
+- Invoke before payload/context capture. If context changes across an awaited
+  hook or initialization, recheck admission within the same deadline before any
+  send. Explicitly configured retries also recheck; the original admitted session
+  signal remains bound so obsolete work cannot migrate to another account. A hook must
   return immediately for bootstrap, refresh, login, logout, and subscription
   control requests that recovery itself needs; it must also admit public calls.
   TypeFerry does not classify application methods or infer auth requirements.
@@ -115,9 +120,38 @@ new dependencies, auth policy, request outbox, or general retry system changes.
 
 ## Verification status and rollback
 
-Executed in `typeferry-ts/` with Node 24.19.0 and npm 11.17.0:
-`npm run test:unit -- src/client/client.unit.spec.ts src/client/client-socket.unit.spec.ts src/client/client-http.unit.spec.ts`:
-76 tests passed after removing diagnostics. Proposed acceptance checks remain
-unimplemented. No product API, package version, release, or production behavior
-has changed. Removing the optional hook restores prior behavior; published
-consumers can revert their package upgrade without a data migration.
+Implemented locally in TypeScript package 0.15.1. A captured context identity
+also prevents a late token-refresh continuation from republishing credentials
+after logout/account change or clearing a newer account after an obsolete
+terminal error. Focused production-client tests reproduced those races before
+the guards were added. The admission recheck covers credential rotation between
+hook resolution and dispatch without a new validation callback API.
+
+Executed with Node 24.19.0 and npm 11.17.0 from `typeferry-ts/`:
+
+- `npm run test:unit`: 138 files, 1726 tests passed, including 17 admission and
+  refresh-race regressions. Existing unconfigured client suites remain green.
+- `TYPEFERRY_MONGODB_TEST_URI='mongodb://127.0.0.1:37017/?replicaSet=rs0&directConnection=true' TYPEFERRY_MONGODB_TEST_DB='typeferry_mongodb_admission_test' bash ../scripts/run-with-redis.sh npm run test:integration`:
+  15 files and 88 tests passed; one optional Ruby file with three tests skipped
+  because `TYPEFERRY_RUBY_INTEGRATION` was not enabled. The guarded test database
+  and temporary Redis were cleaned up. An earlier invocation without the Mongo
+  URI was interrupted after default-port connection timeouts.
+- `npm run test:browser`: three files, ten tests passed.
+- `npm ci`: immutable install passed with zero vulnerabilities; npm reported the
+  existing deprecated `@types/json-stable-stringify` stub. Focused core suites
+  (114 tests), typecheck, build, and package validation passed again afterwards.
+- `npm run lint -- --fix`, `npm run typecheck`, `npm run build`,
+  `npm pack --dry-run --json`, and `npm audit`: passed; zero vulnerabilities.
+- `node ../scripts/verify-npm-package.mjs`: 571 allowed package files; emitted
+  declarations expose the new client hook/types and caller signal.
+- `node ../scripts/verify-npm-package.mjs --check-version-available`: 0.15.1 is
+  unused and publishable; latest registry version remains 0.15.0.
+
+Acceptance criteria 1-5 pass through the focused core tests and compatibility
+suites. No publication, push, consumer test invocation, or production check was
+performed by this package task. Diagnostic consumer validation belongs to the
+consumer repository, and final consumer validation must use a registry artifact.
+
+Removing the optional hook restores prior admission behavior; published consumers
+can revert their package upgrade without a data migration. Cancellation does not
+undo an operation already performed by the server.

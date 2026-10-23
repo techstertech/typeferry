@@ -94,6 +94,7 @@ export async function refreshAccessToken(
   }
 
   state.isRefreshing = true
+  const context = client.context
 
   try {
     /**
@@ -118,6 +119,10 @@ export async function refreshAccessToken(
         http: true,
       },
     )
+
+    if (client.context !== context) {
+      throw new Error('TypeFerry: Session changed during token refresh')
+    }
 
     if (!result) {
       throw new Error('Token refresh failed')
@@ -161,7 +166,7 @@ export async function refreshAccessToken(
       err,
     )
 
-    if (isAuthFailure) client.clearContext()
+    if (isAuthFailure && client.context === context) client.clearContext()
 
     processQueue(state, err, null)
     throw error

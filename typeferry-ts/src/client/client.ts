@@ -26,6 +26,7 @@ import { IdleTimer } from './idle-timer'
 import type { TypeFerryLogger } from './logger'
 import { logger, LogLevel } from './logger'
 import { VisibilityManager } from './visibility-manager'
+import { RequestLifetime } from './request-lifetime'
 type Timeout = ReturnType<typeof setTimeout>
 
 export type ErrorHandler = (error: unknown) => unknown
@@ -43,7 +44,34 @@ export type WebSocketRequestParams = {
   [key: string]: unknown
 }
 
+/**
+ * Describes a logical RPC before its transport or credentials are captured.
+ */
+export type DispatchRequest = {
+  readonly client: Client
+  readonly method: string
+  readonly kind: 'call' | 'void'
+  readonly deadline: number
+  readonly signal: AbortSignal
+}
+
+/**
+ * An application session signal invalidates dispatch and obsolete completion.
+ */
+export type DispatchAdmission = {
+  readonly signal?: AbortSignal
+}
+
 export type ClientOptions = {
+  /**
+   * Optional application admission policy, awaited before an RPC sends.
+   * Credential changes during admission cause a bounded recheck without sending.
+   * Control/public methods needed by recovery must be admitted without waiting.
+   */
+  beforeDispatch?: (
+    request: DispatchRequest,
+  ) => DispatchAdmission | void | Promise<DispatchAdmission | void>
+
   /**
    * Explicit backend origins take precedence over host, port, httpPort and secure.
    */
@@ -103,6 +131,8 @@ export class Client<
   channels: Map<string, ClientChannel> = new Map()
 
   timeouts: Set<Timeout> = new Set()
+
+  private readonly requests = new Set<RequestLifetime>()
 
   initialized = false
 
@@ -290,6 +320,8 @@ export class Client<
   }
 
   async close() {
+    for (const request of this.requests) request.cancel()
+
     this.emit(ClientEvents.CLOSE)
 
     this.timeouts.forEach(timeout => clearTimeout(timeout))
@@ -376,8 +408,13 @@ export class Client<
   void<T = unknown>(
     method: string,
     params?: MethodParams<T>,
-    { http, httpFallback = true }: CallOptions = {},
+    options: CallOptions = {},
   ): Promise<void> {
+    if (this.options.beforeDispatch || options.signal) {
+      return this.admittedRequest<void>(method, params, this.normalizeCallOptions(options), 'void')
+    }
+    const { http, httpFallback = true } = options
+
     return new Promise((resolve, reject) => {
       const payload = { method, params }
 
@@ -423,15 +460,19 @@ export class Client<
     http: boolean,
     httpFallback: boolean,
     timeout: number,
+    lifetime?: RequestLifetime,
   ): Promise<R> {
+    lifetime?.remaining()
     this.emit(ClientEvents.OUTBOUND_MESSAGE, { method, params })
+
+    lifetime?.remaining()
 
     // HTTP path: used when http=true or socket not ready with fallback enabled
     if (http || (!this.clientSocket.ready && httpFallback)) {
       return new Promise((resolve, reject) => {
         const uuid = Presentation.uuid()
         const payload = { uuid, type: PayloadType.METHOD, method, params }
-        this.clientHttp.request<R>(payload, resolve, reject)
+        this.clientHttp.request<R>(payload, resolve, reject, lifetime?.signal)
       })
     }
 
@@ -468,19 +509,26 @@ export class Client<
     method: string,
     params: unknown,
     opts: ReturnType<typeof this.normalizeCallOptions>,
+    lifetime?: RequestLifetime,
   ): Promise<R> {
     let lastError: unknown
 
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
-      try {
-        return await this.executeCall<R>(
-          method,
-          params,
-          opts.http,
-          opts.httpFallback,
-          opts.timeout,
+      let dispatched = false
+      const execute = (): Promise<R> => {
+        dispatched = true
+        return this.executeCall<R>(
+          method, params, opts.http, opts.httpFallback,
+          lifetime?.remaining() ?? opts.timeout, lifetime,
         )
+      }
+      try {
+        return lifetime
+          ? await this.dispatchAdmitted(method, 'call', opts, lifetime, execute)
+          : await execute()
       } catch (error) {
+        if (!dispatched) throw error
+        lifetime?.remaining()
         lastError = error
         if (attempt > 0) {
           this.logger.method(LogLevel.WARN, 'Method call retry failed', {
@@ -491,13 +539,100 @@ export class Client<
           })
         }
         if (attempt >= opts.maxRetries) throw lastError
-        await new Promise(resolve =>
-          setTimeout(resolve, opts.delayBetweenRetriesMs),
-        )
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const delay = new Promise<void>(resolve => {
+          timer = setTimeout(resolve, opts.delayBetweenRetriesMs)
+        })
+        try {
+          if (lifetime) await lifetime.wait(delay)
+          else await delay
+        } finally {
+          clearTimeout(timer)
+        }
       }
     }
 
     throw lastError ?? new Error('TypeFerry method call did not execute')
+  }
+
+  private async waitForAdmittedInitialization(lifetime: RequestLifetime): Promise<void> {
+    if (this.initialized) return
+    let initialized: (() => void) | undefined
+    const ready = new Promise<void>(resolve => {
+      initialized = resolve
+      this.once(ClientEvents.INITIALIZED, initialized)
+    })
+    try {
+      await lifetime.wait(ready)
+    } finally {
+      if (initialized) this.off(ClientEvents.INITIALIZED, initialized)
+    }
+  }
+
+  private async dispatchAdmitted<R>(
+    method: string,
+    kind: DispatchRequest['kind'],
+    opts: ReturnType<typeof this.normalizeCallOptions>,
+    lifetime: RequestLifetime,
+    dispatch: () => Promise<R>,
+  ): Promise<R> {
+    while (true) {
+      lifetime.remaining()
+      const context = this.context
+      const admission = await lifetime.wait(this.options.beforeDispatch?.({
+        client: this,
+        method,
+        kind,
+        deadline: lifetime.deadline,
+        signal: lifetime.signal,
+      }))
+      if (admission?.signal) lifetime.follow(admission.signal)
+      if (!opts.ignoreInit) await this.waitForAdmittedInitialization(lifetime)
+      lifetime.remaining()
+
+      // Renewal can race an awaited hook or initialization. Recheck before
+      // sending, retaining every admitted session's cancellation boundary.
+      if (context !== this.context) continue
+      return dispatch()
+    }
+  }
+
+  private async admittedRequest<R>(
+    method: string,
+    params: unknown,
+    opts: ReturnType<typeof this.normalizeCallOptions>,
+    kind: DispatchRequest['kind'],
+  ): Promise<R> {
+    const lifetime = new RequestLifetime(opts.timeout, opts.signal)
+    this.requests.add(lifetime)
+    try {
+      if (kind === 'call') {
+        return await lifetime.wait(this.retryCall<R>(method, params, opts, lifetime))
+      }
+
+      await lifetime.wait(this.dispatchAdmitted(method, kind, opts, lifetime, async () => {
+        this.emit(ClientEvents.OUTBOUND_MESSAGE, { method, params })
+        lifetime.remaining()
+        if (opts.http || (!this.clientSocket.ready && opts.httpFallback)) {
+          await new Promise<void>((resolve, reject) => {
+            const payload = {
+              type: PayloadType.METHOD,
+              uuid: Presentation.uuid(),
+              method,
+              params,
+              void: true,
+            }
+            void this.clientHttp.request(payload, resolve, reject, lifetime.signal)
+          })
+        } else {
+          this.clientSocket.send('rpc:void', { method, params })
+        }
+      }))
+      return undefined as R
+    } finally {
+      lifetime.dispose()
+      this.requests.delete(lifetime)
+    }
   }
 
   async call<P = Record<string, unknown>, R = unknown>(
@@ -506,6 +641,9 @@ export class Client<
     options?: CallOptions,
   ): Promise<R> {
     const opts = this.normalizeCallOptions(options)
+    if (this.options.beforeDispatch || opts.signal) {
+      return this.admittedRequest<R>(method, params, opts, 'call')
+    }
 
     const shouldWaitForInit = !opts.ignoreInit && !this.initialized
     if (shouldWaitForInit) await this.waitForInitialization(opts.timeout)

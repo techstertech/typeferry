@@ -36,6 +36,35 @@ const result = await client.call<GreetingInput, GreetingResult>(
 
 Use `client.void(...)` when no result is needed. Call options can select HTTP behavior, caching, and other per-call controls; keep transport selection at the application boundary instead of duplicating method names.
 
+## Optional request admission
+
+`ClientOptions.beforeDispatch` lets the application await its existing recovery
+operation before an RPC captures credentials or chooses a transport. The hook
+receives `{ client, method, kind, deadline, signal }`; `kind` is `call` or `void`,
+`deadline` is an absolute `Date.now()` timestamp, and `signal` is cancelled by the
+request timeout, caller cancellation, or client close. Return
+`{ signal: sessionSignal }` to bind dispatch and result delivery to the captured
+application session. Reject pending admission when that session ends.
+
+Admit public and recovery control methods immediately so they cannot wait on
+recovery that needs those same methods. TypeFerry does not infer application auth
+policy. Admission may run again if credentials change while it waits, or before
+an explicitly configured transport retry. Rechecks keep the original deadline
+and session cancellation boundaries; they do not send or replay requests.
+
+With the hook configured, admission, initialization, HTTP fallback, and response
+waiting share the caller's `timeout` budget (20 seconds by default). The optional
+`CallOptions.signal` also enables bounded cancellation for an individual call
+without configuring a hook. Aborted unsent work never dispatches later. Cancelling
+a sent request only rejects local completion; it cannot undo server effects.
+Default RPC retries remain zero; request retries only when the method is safe to
+repeat. Arbitrary `Client.fetch()` and direct application HTTP calls are outside
+this RPC admission boundary.
+
+Clients without admission or a caller signal retain their existing lifecycle.
+Token refresh also refuses to publish credentials or clear a newer session when
+the client context changes while its refresh response is outstanding.
+
 ## Lifecycle
 
 Create one client per browser application unless isolation is intentional. Observe its connection state, handle rejected promises, and close application-owned clients during teardown. For React UI state, prefer the [React hooks](react.md), which reuse this client rather than replacing it. Other UI frameworks can integrate directly with the framework-agnostic client lifecycle.
