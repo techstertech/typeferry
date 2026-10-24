@@ -1,6 +1,6 @@
 ---
 status: shipped
-release-status: ready-for-manual-publication
+release-status: published
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-24
@@ -133,9 +133,11 @@ and short JWT keys used only by tests.
 
 ## Publication handoff
 
-Candidate: `typeferry@0.15.2`, prepared but not published. The public registry
-confirmed this version was unused on 2026-10-24. The publish command rechecks
-availability and refuses immutable-version replacement.
+The operator published `typeferry@0.15.2` on 2026-10-24. The public registry
+confirms `latest` is `0.15.2` and records `gitHead`
+`5c9bbc5e12779ce54da12f7d423d4d2e9b7ed665`. The downloaded registry tarball is
+byte-identical to the verified archive below. The agent performed verification
+only; it did not publish, push, or tag this release.
 
 Verified archive:
 `/Users/leonardo/.cache/typeferry/releases/0.15.2/typeferry-0.15.2.tgz`.
@@ -146,8 +148,10 @@ Verified archive:
 
 The default local Go module cache has modified module directories. Verification
 used a separate verified cache, retained beside the archive for publication.
-This avoids repairing or trusting unrelated local cache state. Mise also needs
-the existing command-scoped Go root override. From a clean `main` checkout:
+This avoids repairing or trusting unrelated local cache state. The preparation
+command below is historical: publication succeeded and its immutable-version
+guard now refuses another upload of `0.15.2`. Mise used the existing
+command-scoped Go root override:
 
 ```sh
 cd /Users/leonardo/Repositories/typeferry

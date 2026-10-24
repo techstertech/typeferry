@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.15.1` | Published |
+| TypeScript     | `typeferry`                   | `0.15.2` | Published |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -43,9 +43,9 @@ are outside the accepted shared server scope.
 
 ## TypeScript release
 
-### Authenticated cache security candidate
+### Authenticated cache security release
 
-`typeferry@0.15.2` is the pending manual-publication candidate. Authenticated
+The operator published `typeferry@0.15.2` on 2026-10-24. Authenticated
 method calls bypass result caching in TypeScript, Python, Rust, Ruby, and Go.
 Anonymous cache behavior remains unchanged. The TypeScript candidate also
 raises the Zod minimum to patched `4.6.7` and locks development Undici to `7.30.1`.
@@ -60,9 +60,10 @@ tests, including explicitly enabled Ruby interoperability. Audit reports zero
 vulnerabilities. Python, Rust, Ruby, and Go package checks also passed. The
 verified archive contains 574 allowed files. See the specification for checksums
 and the local Go cache override required by the operator's publication command.
-Implementation commit: `5c9bbc5`. The candidate has not been published, pushed,
-or tagged. The specification's `shipped` lifecycle refers to committed source
-and completed preparation, not a registry upload.
+The public registry confirms `latest` is `0.15.2` and `gitHead` is implementation
+commit `5c9bbc5e12779ce54da12f7d423d4d2e9b7ed665`. The downloaded registry tarball
+is byte-identical to the verified candidate. The agent verified publication but
+did not publish, push, or tag the release.
 
 TypeFerry is published publicly on npm at `0.13.0` (verified against the
 registry on 2026-10-02). This release adds exact hostname allowlists for development proxies and
