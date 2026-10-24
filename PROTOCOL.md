@@ -528,8 +528,16 @@ caller's `ClientNode.authenticated` is false:
 
 ### 6.3 Cached methods
 
-When `opts.cache: true` is set, `Method` wraps its handler with
-`customMemoize`:
+When `opts.cache: true` is set, only unauthenticated calls may use the
+method-result cache. Every authenticated invocation MUST execute the handler
+after the usual validation and middleware. It MUST NOT read or populate cache
+entries, including pending results. This rule applies to public and protected
+methods and uses the current authentication state on each invocation.
+
+This security correction supersedes the earlier parameter-only caching behavior
+for authenticated callers. It preserves wire envelopes and anonymous cache keys.
+
+For an unauthenticated call, `Method` uses `customMemoize`:
 
 ```ts
 const key = EJSON.stringify(args[0])   // first argument = params
@@ -538,13 +546,17 @@ const key = EJSON.stringify(args[0])   // first argument = params
 If a cached entry exists and `Date.now() - cached.timestamp < maxAge`,
 the cached value is returned without invoking the handler.
 
-Source: `src/server/method.ts:67-87,123`.
+Anonymous cached handlers MUST be suitable for sharing across anonymous callers.
+Applications MUST NOT cache responses that depend on caller-specific request
+metadata or authorization performed only inside such a handler.
 
-**Default `maxAge` is 60 000 ms** (`src/server/method.ts:72,116`).
+Source: `typeferry-ts/src/server/method.ts`, `customMemoize`.
+
+**Default `maxAge` is 60 000 ms** (`typeferry-ts/src/server/method.ts`).
 
 Conformance notes:
 
-- Cache keys MUST be derived from `EJSON.stringify` over the first
+- Anonymous cache keys MUST be derived from `EJSON.stringify` over the first
   positional argument (the `params` object), not a hash of it. The
   stable-stringify algorithm in section 3.3 is NOT used for cache keys
   in the current TS implementation — `EJSON.stringify` is the default

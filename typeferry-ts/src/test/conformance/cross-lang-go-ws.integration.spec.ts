@@ -26,8 +26,8 @@ describe('TypeScript WebSocket client ↔ Go server', () => {
     })
   }
 
-  goMethodContract(async () => {
-    const client = await newClient()
+  goMethodContract(async token => {
+    const client = await newClient(token)
     return {
       call: (method, params) => client.call(method, params, { httpFallback: false }),
       close: () => client.close(),

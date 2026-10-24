@@ -48,7 +48,10 @@ export type MethodFunction<T = unknown, R = unknown> = (
  * ```
  */
 export interface MethodOptions<Schema extends z.ZodType = z.ZodType> {
-  /** Enable result caching for this method */
+  /**
+   * Cache anonymous results only. Authenticated calls always run the handler
+   * so cached data cannot cross identities or skip inline authorization.
+   */
   cache?: boolean
   /** Cache TTL in milliseconds (default: 60000) */
   maxAge?: number
@@ -91,6 +94,9 @@ function customMemoize<TParameters, TResult>(
   const { maxAge = 60000 } = options
 
   return function (this: ClientNode, parameters): Promise<TResult> | TResult {
+    // Inline authorization must run even when the same caller repeats a request.
+    if (this.authenticated) return fn.call(this, parameters)
+
     const key = EJSON.stringify(parameters) // Normalize method params
     const now = Date.now()
     const cached = cache.get(key)

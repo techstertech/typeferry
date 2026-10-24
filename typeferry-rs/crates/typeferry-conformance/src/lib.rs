@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{TimeZone, Utc};
 use futures::FutureExt as _;
@@ -137,6 +138,13 @@ pub fn rehydrate(node: &Value) -> EjsonValue {
 // ---------------------------------------------------------------------------
 
 pub fn build_handler(spec: &str) -> RpcHandler {
+    if spec == "increment_counter" {
+        let calls = Arc::new(AtomicUsize::new(0));
+        return Arc::new(move |_node, _params| {
+            let calls = calls.clone();
+            async move { Ok(json!(calls.fetch_add(1, Ordering::Relaxed) + 1)) }.boxed()
+        });
+    }
     if spec == "echo_params" {
         return Arc::new(|_n, p| async move { Ok(p) }.boxed());
     }
@@ -254,6 +262,7 @@ pub fn configure_server(server: &Arc<Server>, setup: Option<&Value>) {
             let handler = build_handler(spec["handler"].as_str().unwrap());
             let schema = build_schema(spec.get("schema"));
             let opts = MethodOptions {
+                cache: spec.get("cache").and_then(|v| v.as_bool()).unwrap_or(false),
                 protected: spec
                     .get("protected")
                     .and_then(|v| v.as_bool())

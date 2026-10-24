@@ -34,8 +34,8 @@ describe('TypeScript HTTP client ↔ Go server', () => {
     })
   }
 
-  goMethodContract(async () => {
-    const http = clientHttp()
+  goMethodContract(async token => {
+    const http = clientHttp(token)
     return { call: (method, params) => call(http, method, params), close: async () => undefined }
   })
 

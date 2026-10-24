@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -17,7 +18,7 @@ from typeferry.server.schema import (
     ValidationResult,
 )
 from typeferry.server.server import Server, ServerOptions
-from typeferry.utils.errors import SchemaValidationError
+from typeferry.utils.errors import PublicError, SchemaValidationError
 
 
 def _server() -> Server:
@@ -124,6 +125,81 @@ async def test_cached_method_hits_cache_on_identical_params() -> None:
     assert a1 == 1 and a2 == 1 and b1 == 2
     # Two distinct param objects → two handler invocations; second {a:1} hits cache.
     assert count["n"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protected", [False, True])
+async def test_authenticated_cached_calls_keep_caller_results_separate(protected: bool) -> None:
+    server = _server()
+    callers = [ClientNode(server) for _ in range(2)]
+    for caller in callers:
+        caller.authenticated = True
+        caller.set_context({"user": {"_id": uuid4().hex}})
+
+    def handler(node: ClientNode, _params: dict[str, str]) -> str | None:
+        return node.user_id
+
+    method = Method(server, "private", handler, MethodOptions(cache=True, protected=protected))
+    params = {"resource": uuid4().hex}
+
+    for caller in callers:
+        assert await method.exec(params, caller) == caller.user_id
+
+
+@pytest.mark.asyncio
+async def test_authenticated_cached_calls_recheck_inline_authorization() -> None:
+    server = _server()
+    caller = ClientNode(server)
+    caller.authenticated = True
+    allowed = True
+
+    def handler(_node: ClientNode, _params: dict[str, str]) -> str:
+        if not allowed:
+            raise PublicError("Access denied")
+        return "private result"
+
+    method = Method(server, "permission", handler, MethodOptions(cache=True))
+    params = {"resource": uuid4().hex}
+
+    assert await method.exec(params, caller) == "private result"
+
+    allowed = False
+
+    with pytest.raises(PublicError, match="Access denied"):
+        await method.exec(params, caller)
+
+
+@pytest.mark.asyncio
+async def test_cache_reads_and_writes_follow_connection_authentication_changes() -> None:
+    server = _server()
+    caller = ClientNode(server)
+    calls = 0
+
+    def handler(node: ClientNode, _params: dict[str, bool]) -> int:
+        nonlocal calls
+        calls += 1
+        return calls
+
+    method = Method(server, "transition", handler, MethodOptions(cache=True))
+    fresh_params = {"fresh": True}
+
+    assert await method.exec({}, caller) == 1
+    assert await method.exec({}, caller) == 1
+
+    caller.authenticated = True
+
+    assert await method.exec({}, caller) == 2
+    assert await method.exec(fresh_params, caller) == 3
+
+    caller.authenticated = False
+
+    assert await method.exec(fresh_params, caller) == 4
+    assert await method.exec(fresh_params, caller) == 4
+    assert await method.exec({}, caller) == 1
+
+    caller.authenticated = True
+
+    assert await method.exec({}, caller) == 5
 
 
 @pytest.mark.asyncio

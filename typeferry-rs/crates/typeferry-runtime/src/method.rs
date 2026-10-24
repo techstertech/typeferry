@@ -86,8 +86,11 @@ impl Method {
             clean = result.data.unwrap_or(Value::Null);
         }
 
-        // 2. Cache lookup.
-        if let Some(cache) = &self.cache {
+        // Authenticated calls must repeat handler authorization and never share
+        // results with anonymous callers, including after connection transitions.
+        if !node.is_authenticated()
+            && let Some(cache) = &self.cache
+        {
             let key = stable_stringify::stringify(&clean);
             if let Some(hit) = cache_get(cache, &key) {
                 return Ok(hit);

@@ -49,12 +49,16 @@ class WebSocketFixturesTest < Minitest::Test
       name = method.fetch("handler")
       handler = if name == "echo_params"
         ->(_node, params) { params }
+      elsif name == "increment_counter"
+        calls = 0
+        ->(*) { calls += 1 }
       elsif name.start_with?("raise_public:")
         ->(*) { raise TypeFerry::PublicError, name.delete_prefix("raise_public:") }
       else
         ->(*) { name.delete_prefix("return_const:") }
       end
-      server.add_method(method.fetch("name"), handler, protected: method.fetch("protected", false))
+      server.add_method(method.fetch("name"), handler, protected: method.fetch("protected", false),
+        cache: method.fetch("cache", false))
     end
     setup.fetch("events", []).each { |event| server.add_event(event.fetch("name")) }
     if setup["auth"]

@@ -13,6 +13,7 @@ func TestGroupRegistersNamesAndOverridesDefaults(t *testing.T) {
 	server := runtime.NewServer()
 	group := NewGroup("studio").ProtectedByDefault().CacheByDefault(time.Minute)
 	calls := 0
+	sharedCalls := 0
 	name, err := group.Method("secret", func(_ context.Context, _ *runtime.Client, _ ejson.Value) (ejson.Value, error) {
 		calls++
 		return ejson.Int(int64(calls)), nil
@@ -23,6 +24,13 @@ func TestGroupRegistersNamesAndOverridesDefaults(t *testing.T) {
 	_, err = group.Method("public", func(_ context.Context, _ *runtime.Client, _ ejson.Value) (ejson.Value, error) {
 		return ejson.Bool(true), nil
 	}, Options{Public: true, NoCache: true, WireName: "public.ping"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = group.Method("shared", func(_ context.Context, _ *runtime.Client, _ ejson.Value) (ejson.Value, error) {
+		sharedCalls++
+		return ejson.Int(int64(sharedCalls)), nil
+	}, Options{Public: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +47,22 @@ func TestGroupRegistersNamesAndOverridesDefaults(t *testing.T) {
 	if _, err := server.Call(context.Background(), "public.ping", ejson.Null(), client); err != nil {
 		t.Fatal(err)
 	}
+	for range 2 {
+		if _, err := server.Call(context.Background(), "studio.shared", ejson.Null(), client); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sharedCalls != 1 {
+		t.Fatalf("anonymous cached handler called %d times, want 1", sharedCalls)
+	}
+
 	client.SetAuthenticated(true)
 	for index := 0; index < 2; index++ {
 		if _, err := server.Call(context.Background(), "studio.secret", ejson.Null(), client); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("cached handler called %d times", calls)
+	if calls != 2 {
+		t.Fatalf("authenticated handler called %d times, want 2", calls)
 	}
 }

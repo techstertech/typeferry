@@ -149,6 +149,10 @@ def _memoize(
     """Cache-key algorithm MUST match TS: ``EJSON.stringify(first_arg)``
     with non-canonical output (PROTOCOL.md §6.3).
 
+    Authenticated calls bypass both lookup and storage so handler-owned
+    permission checks run on every invocation. Anonymous handlers must return
+    results independent of caller context.
+
     The Python handler receives ``(node, params)``; the cache key is
     computed from ``params`` (the first RPC argument) so it aligns with
     the TS ``args[0]`` convention.
@@ -157,6 +161,9 @@ def _memoize(
     cache: dict[str, tuple[Any, float]] = {}
 
     async def memoized(node: ClientNode | None, params: Any) -> Any:
+        if node is not None and node.authenticated:
+            return await _call_possibly_async(fn, node, params)
+
         key = stringify(params)
         now_ms = time.monotonic() * 1000
         hit = cache.get(key)

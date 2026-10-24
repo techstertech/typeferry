@@ -1,0 +1,8 @@
+{"op":"setup","methods":[{"name":"cached_counter","handler":"increment_counter","cache":true}]}
+{"op":"connect","query":{}}
+{"op":"expect_server_frame","frame":{"t":"auth","authenticated":false}}
+{"op":"send","frame":{"t":"rpc","id":"r1","method":"cached_counter","params":{}}}
+{"op":"expect_server_frame","frame":{"t":"rpc:res","id":"r1","result":1}}
+{"op":"send","frame":{"t":"rpc","id":"r2","method":"cached_counter","params":{}}}
+{"op":"expect_server_frame","frame":{"t":"rpc:res","id":"r2","result":1}}
+{"op":"disconnect"}

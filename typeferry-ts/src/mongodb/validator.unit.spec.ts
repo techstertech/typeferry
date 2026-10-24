@@ -40,7 +40,7 @@ describe('MongoDB Zod validator compiler', () => {
           minimum: 0,
           maximum: Number.MAX_SAFE_INTEGER,
         },
-        note: { anyOf: [{ bsonType: 'string' }, { bsonType: 'null' }] },
+        note: { bsonType: ['string', 'null'] },
         tags: { bsonType: 'array', items: { bsonType: 'string' } },
         address: {
           bsonType: 'object',

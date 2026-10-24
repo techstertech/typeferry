@@ -97,8 +97,8 @@ that can't express a hint MUST skip the case rather than falsify it.
 
 ### `fixtures/ws/*.seq.ndjson`
 
-One JSON object per line. The first line MUST be a `connect`
-directive; subsequent lines interleave client→server sends with
+One JSON object per line. An initial `setup` directive MUST precede the
+`connect` directive; subsequent lines interleave client→server sends with
 expected server→client frames:
 
 ```
@@ -112,6 +112,13 @@ expected server→client frames:
 `expect_server_frame` matches the next server frame by equality
 (implementations MAY ignore server-emitted ping frames while
 matching).
+
+The initial `setup.methods` entries support `name`, `handler`, `protected`, and
+`cache`. The `increment_counter` handler returns its invocation count, starting
+at one per registration. Fixtures 024 and 025 verify that authenticated calls
+bypass the result cache while anonymous calls still share a cached result.
+Go also runs these shared fixtures and verifies mixed anonymous/authenticated
+calls through its TypeScript-client HTTP and WebSocket contract tests.
 
 ### `fixtures/redis/*.case.json`
 

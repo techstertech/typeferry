@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
 import { PublicError } from '../utils'
@@ -9,7 +9,7 @@ import { Server } from './server'
 const RESOURCE_ID = 'audit-resource'
 const resourceSchema = z.object({ resourceId: z.string() })
 
-describe('method authorization audit reproductions', () => {
+describe('method cache authorization', () => {
   let server: Server
 
   beforeEach(async () => {
@@ -19,6 +19,8 @@ describe('method authorization audit reproductions', () => {
   })
 
   afterEach(async () => {
+    vi.restoreAllMocks()
+
     await server.close()
   })
 
@@ -31,30 +33,29 @@ describe('method authorization audit reproductions', () => {
     return node
   }
 
-  /**
-   * These expected failures specify the missing security properties. Keep them
-   * explicit until a separately approved cache contract change fixes the issue.
-   */
-  it.fails('isolates cached private results between authenticated users', async () => {
-    const owner = authenticatedNode()
-    const stranger = authenticatedNode()
-    const method = new Method(
-      server,
-      'audit.privateResult',
-      function () {
-        return { ownerId: this.userId }
-      },
-      { schema: resourceSchema, protected: true, cache: true },
-    )
-    const parameters = { resourceId: RESOURCE_ID }
+  it.each([false, true])(
+    'isolates authenticated results with protected=%s',
+    async isProtected => {
+      const owner = authenticatedNode()
+      const stranger = authenticatedNode()
+      const method = new Method(
+        server,
+        'audit.privateResult',
+        function () {
+          return { ownerId: this.userId }
+        },
+        { schema: resourceSchema, protected: isProtected, cache: true },
+      )
+      const parameters = { resourceId: RESOURCE_ID }
 
-    expect(await method.exec(parameters, owner)).toEqual({ ownerId: owner.userId })
-    expect(await method.exec(parameters, stranger)).toEqual({
-      ownerId: stranger.userId,
-    })
-  })
+      expect(await method.exec(parameters, owner)).toEqual({ ownerId: owner.userId })
+      expect(await method.exec(parameters, stranger)).toEqual({
+        ownerId: stranger.userId,
+      })
+    },
+  )
 
-  it.fails('rechecks handler authorization after resource access is revoked', async () => {
+  it('rechecks handler authorization after resource access is revoked', async () => {
     const owner = authenticatedNode()
     let accessAllowed = true
     const method = new Method(
@@ -95,8 +96,8 @@ describe('method authorization audit reproductions', () => {
     })
   })
 
-  it('rechecks authorization middleware before returning a cached result', async () => {
-    const owner = authenticatedNode()
+  it('rechecks authorization middleware before returning an anonymous cached result', async () => {
+    const owner = new ClientNode(server)
     let accessAllowed = true
     const method = new Method(
       server,
@@ -106,7 +107,6 @@ describe('method authorization audit reproductions', () => {
       },
       {
         schema: resourceSchema,
-        protected: true,
         cache: true,
         middleware: [
           () => {
@@ -122,5 +122,59 @@ describe('method authorization audit reproductions', () => {
     accessAllowed = false
 
     await expect(method.exec(parameters, owner)).rejects.toThrow('Access denied')
+  })
+
+  it('never reads or populates anonymous cache across authentication transitions', async () => {
+    const node = new ClientNode(server)
+    let calls = 0
+    const method = new Method(server, 'audit.transitions', () => ++calls, {
+      cache: true,
+    })
+    const parameters = { resourceId: RESOURCE_ID }
+
+    expect(await method.exec(parameters, node)).toBe(1)
+    expect(await method.exec(parameters, node)).toBe(1)
+
+    node.authenticated = true
+    node.setContext({ user: { _id: crypto.randomUUID() } })
+
+    expect(await method.exec(parameters, node)).toBe(2)
+    expect(await method.exec(parameters, node)).toBe(3)
+
+    node.authenticated = false
+    node.setContext({})
+
+    expect(await method.exec(parameters, node)).toBe(1)
+
+    const privateFirstParameters = { resourceId: crypto.randomUUID() }
+
+    node.authenticated = true
+    node.setContext({ user: { _id: crypto.randomUUID() } })
+
+    expect(await method.exec(privateFirstParameters, node)).toBe(4)
+
+    node.authenticated = false
+    node.setContext({})
+
+    expect(await method.exec(privateFirstParameters, node)).toBe(5)
+    expect(await method.exec(privateFirstParameters, node)).toBe(5)
+  })
+
+  it('preserves anonymous cache sharing and expiry', async () => {
+    const first = new ClientNode(server)
+    const second = new ClientNode(server)
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    let calls = 0
+    const method = new Method(server, 'audit.anonymous', () => ++calls, {
+      cache: true,
+      maxAge: 100,
+    })
+
+    expect(await method.exec({}, first)).toBe(1)
+    expect(await method.exec({}, second)).toBe(1)
+
+    now.mockReturnValue(1_100)
+
+    expect(await method.exec({}, second)).toBe(2)
   })
 })

@@ -417,7 +417,9 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 
 	key := ""
 	var pending *cacheEntry
-	if entry.options.Cache {
+	// Cached results and pending work belong only to anonymous calls. An
+	// authenticated call must execute inline authorization on every invocation.
+	if entry.options.Cache && !client.Authenticated() {
 		var err error
 		key, err = server.codec.Stringify(transformed, false)
 		if err != nil {

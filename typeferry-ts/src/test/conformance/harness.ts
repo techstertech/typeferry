@@ -123,6 +123,12 @@ export function rehydrate(node: any): unknown {
 // ---------------------------------------------------------------------------
 
 export function buildHandler(spec: string): (params: any) => Promise<any> | any {
+  if (spec === 'increment_counter') {
+    let calls = 0
+
+    return () => ++calls
+  }
+
   if (spec === 'add_two_integers') {
     return async (params: any) => Number(params.a) + Number(params.b)
   }

@@ -10,7 +10,7 @@ export interface GoContractClient {
  * case owns its client so authentication and subscriptions cannot bleed across
  * cases; the fixtures remain application declarations over ordinary Go APIs.
  */
-export function goMethodContract(createClient: () => Promise<GoContractClient>): void {
+export function goMethodContract(createClient: (token?: string) => Promise<GoContractClient>): void {
   async function usingClient(check: (client: GoContractClient) => Promise<void>): Promise<void> {
     const client = await createClient()
     try {
@@ -59,5 +59,30 @@ export function goMethodContract(createClient: () => Promise<GoContractClient>):
       expect(await client.call('cached_counter', firstParams)).toEqual(concurrent[0])
       expect(await client.call('cached_counter', { scope: 'shared', b: 2, a: 1 })).not.toEqual(concurrent[0])
     })
+  })
+
+  it('executes authenticated cached calls without reading or replacing anonymous results', async () => {
+    const anonymous = await createClient()
+    const authenticated = await createClient('good-token')
+    const params = { scope: 'authentication-isolation' }
+
+    try {
+      const anonymousResult = await anonymous.call('cached_counter', params)
+      const firstAuthenticated = await authenticated.call('cached_counter', params)
+      const secondAuthenticated = await authenticated.call('cached_counter', params)
+
+      expect(firstAuthenticated).not.toEqual(anonymousResult)
+      expect(secondAuthenticated).not.toEqual(firstAuthenticated)
+      expect(await anonymous.call('cached_counter', params)).toEqual(anonymousResult)
+
+      const authenticatedFirstParams = { scope: 'authenticated-first' }
+      const privateResult = await authenticated.call('cached_counter', authenticatedFirstParams)
+      const publicResult = await anonymous.call('cached_counter', authenticatedFirstParams)
+
+      expect(publicResult).not.toEqual(privateResult)
+      expect(await anonymous.call('cached_counter', authenticatedFirstParams)).toEqual(publicResult)
+    } finally {
+      await Promise.all([anonymous.close(), authenticated.close()])
+    }
   })
 }

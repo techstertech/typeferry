@@ -139,6 +139,16 @@ def build_handler(spec: str) -> Callable[..., Any]:
 
         return handler
 
+    if spec == "increment_counter":
+        calls = 0
+
+        async def increment_counter(_node: object, _params: object) -> int:
+            nonlocal calls
+            calls += 1
+            return calls
+
+        return increment_counter
+
     if spec == "return_user_id":
         async def handler(node: Any, _params: Any) -> str | None:
             return node.user_id
@@ -193,6 +203,7 @@ def configure_server(server: Server, setup: dict[str, Any]) -> None:
             handler,
             MethodOptions(
                 protected=bool(method_spec.get("protected", False)),
+                cache=bool(method_spec.get("cache", False)),
                 schema=build_schema(method_spec.get("schema")),
             ),
         )

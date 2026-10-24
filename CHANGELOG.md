@@ -2,6 +2,8 @@
 
 ## 2026-10-24
 
+- security(server): bypass method caching for authenticated calls
+- security(deps): update zod and undici to patched releases
 - test(server): reproduce cached method authorization gaps
 
 ## 2026-10-22

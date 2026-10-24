@@ -43,6 +43,24 @@ are outside the accepted shared server scope.
 
 ## TypeScript release
 
+### Authenticated cache security candidate
+
+`typeferry@0.15.2` is the pending manual-publication candidate. Authenticated
+method calls bypass result caching in TypeScript, Python, Rust, Ruby, and Go.
+Anonymous cache behavior remains unchanged. The TypeScript candidate also
+raises the Zod minimum to patched `4.6.7` and locks development Undici to `7.30.1`.
+
+See the [contract and verification record](specs/2026-10-24-authenticated-method-cache-bypass.md)
+and the [cache policy decision](decisions/2026-10-24-anonymous-only-method-result-caching.md).
+Publication, tags, pushes, and downstream upgrades remain operator-owned.
+Other language registry publication stays disabled.
+
+The complete release gate passed 1,734 unit, 95 integration, and 10 browser
+tests, including explicitly enabled Ruby interoperability. Audit reports zero
+vulnerabilities. Python, Rust, Ruby, and Go package checks also passed. The
+verified archive contains 574 allowed files. See the specification for checksums
+and the local Go cache override required by the operator's publication command.
+
 TypeFerry is published publicly on npm at `0.13.0` (verified against the
 registry on 2026-10-02). This release adds exact hostname allowlists for development proxies and
 route-specific HTTP body ceilings selected before chunked request buffering.

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
@@ -68,6 +69,7 @@ type operation struct {
 		Name      string `json:"name"`
 		Handler   string `json:"handler"`
 		Protected bool   `json:"protected"`
+		Cache     bool   `json:"cache"`
 	} `json:"methods"`
 	Events []struct {
 		Name string `json:"name"`
@@ -108,8 +110,12 @@ func TestSharedWebSocketFixtures(t *testing.T) {
 				case "setup":
 					for _, definition := range step.Methods {
 						name := definition.Handler
+						var count atomic.Int64
+
 						if err := server.AddMethod(definition.Name, func(_ context.Context, _ *runtime.Client, value ejson.Value) (ejson.Value, error) {
 							switch {
+							case name == "increment_counter":
+								return ejson.Int(count.Add(1)), nil
 							case name == "echo_params":
 								return value, nil
 							case strings.HasPrefix(name, "return_const:"):
@@ -119,7 +125,7 @@ func TestSharedWebSocketFixtures(t *testing.T) {
 							default:
 								return ejson.Null(), errors.New("unknown fixture handler")
 							}
-						}, runtime.MethodOptions{Protected: definition.Protected}); err != nil {
+						}, runtime.MethodOptions{Protected: definition.Protected, Cache: definition.Cache}); err != nil {
 							t.Fatal(err)
 						}
 					}

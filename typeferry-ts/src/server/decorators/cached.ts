@@ -1,5 +1,5 @@
 /**
- * @Cached class/method decorator — enables result caching.
+ * @Cached class/method decorator — enables anonymous result caching.
  * @NoCache method decorator — disables caching for a specific method.
  *
  * @module typeferry/server/decorators/cached
@@ -14,7 +14,8 @@ import {
 const DEFAULT_MAX_AGE = 60_000
 
 /**
- * Enables result caching at the class or method level.
+ * Enables anonymous result caching at the class or method level.
+ * Authenticated calls always execute the handler, including inline authorization.
  *
  * When applied to a class, all methods inherit the cache setting.
  * When applied to a method, it overrides/complements class-level settings.

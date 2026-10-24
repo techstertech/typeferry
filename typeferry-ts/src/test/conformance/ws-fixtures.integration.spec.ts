@@ -19,6 +19,7 @@ function configureServer(server: Server, setup: any): void {
     const handler = buildHandler(spec.handler)
     server.addMethod(spec.name, handler as any, {
       protected: !!spec.protected,
+      cache: !!spec.cache,
     })
   }
   for (const spec of setup.events ?? []) {

@@ -118,8 +118,10 @@ module TypeFerry
 
     def call(node, params)
       validate(params)
-      key = EJSON.stringify(params)
-      hit = cached_value(key)
+      # Authenticated calls must run handler-owned permission checks every time.
+      # Anonymous cached results must not depend on caller context.
+      key = EJSON.stringify(params) if @cache && !node&.authenticated
+      hit = cached_value(key) if key
       return hit.fetch(:value) if hit
 
       execution_id = SecureRandom.uuid
@@ -128,7 +130,7 @@ module TypeFerry
         transformed = @middleware.reduce(params) { |value, step| step.call(node, value) }
         @handler.call(node, transformed)
       end
-      store(key, result)
+      store(key, result) if key
       result
     ensure
       if defined?(started_at) && started_at
