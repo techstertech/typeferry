@@ -59,7 +59,8 @@ The complete release gate passed 1,734 unit, 95 integration, and 10 browser
 tests, including explicitly enabled Ruby interoperability. Audit reports zero
 vulnerabilities. Python, Rust, Ruby, and Go package checks also passed. The
 verified archive contains 574 allowed files. See the specification for checksums
-and the local Go cache override required by the operator's publication command.
+and the preparation environment workaround. The temporary Go module cache was
+removed after publication verification; the archive and verification records remain.
 The public registry confirms `latest` is `0.15.2` and `gitHead` is implementation
 commit `5c9bbc5e12779ce54da12f7d423d4d2e9b7ed665`. The downloaded registry tarball
 is byte-identical to the verified candidate. The agent verified publication but

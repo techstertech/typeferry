@@ -147,10 +147,12 @@ Verified archive:
 - Integrity: `sha512-ARiwEC0MIGw+uVVcRDDqrDxJeR73gixJHubOds4aPwxlsmyNZTjc6+kGJOWA3q3fJ+jC7dhabWiDTJIOYcZtRg==`
 
 The default local Go module cache has modified module directories. Verification
-used a separate verified cache, retained beside the archive for publication.
-This avoids repairing or trusting unrelated local cache state. The preparation
+used a separate verified cache for publication. That generated cache was removed
+after registry verification; the archive and verification records remain.
+This avoided repairing or trusting unrelated local cache state. The preparation
 command below is historical: publication succeeded and its immutable-version
-guard now refuses another upload of `0.15.2`. Mise used the existing
+guard now refuses another upload of `0.15.2`. Its temporary cache path no longer
+exists. Mise used the existing
 command-scoped Go root override:
 
 ```sh
