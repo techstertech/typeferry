@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-24
+
+- test(server): reproduce cached method authorization gaps
+
 ## 2026-10-22
 
 - feat(client): add opt-in bounded RPC admission and cancellation
