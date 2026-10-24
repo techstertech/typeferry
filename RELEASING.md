@@ -60,6 +60,9 @@ tests, including explicitly enabled Ruby interoperability. Audit reports zero
 vulnerabilities. Python, Rust, Ruby, and Go package checks also passed. The
 verified archive contains 574 allowed files. See the specification for checksums
 and the local Go cache override required by the operator's publication command.
+Implementation commit: `5c9bbc5`. The candidate has not been published, pushed,
+or tagged. The specification's `shipped` lifecycle refers to committed source
+and completed preparation, not a registry upload.
 
 TypeFerry is published publicly on npm at `0.13.0` (verified against the
 registry on 2026-10-02). This release adds exact hostname allowlists for development proxies and

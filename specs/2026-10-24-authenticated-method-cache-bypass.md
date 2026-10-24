@@ -1,11 +1,13 @@
 ---
-status: validating
+status: shipped
+release-status: ready-for-manual-publication
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-24
 updated: 2026-10-24
 implementation:
-  commits: []
+  commits:
+    - 5c9bbc5
 ---
 
 # Authenticated method cache bypass
@@ -86,7 +88,7 @@ and [Undici advisory](https://github.com/advisories/GHSA-4qv8-2p9j-2685).
 - [x] Add failing tests, then implement all five servers.
 - [x] Update protocol, shared acceptance evidence, and cache documentation.
 - [x] Verify server suites and the TypeScript release artifact.
-- [ ] Commit the candidate and record operator publication instructions.
+- [x] Commit the candidate and record operator publication instructions.
 
 ## Verification results
 
