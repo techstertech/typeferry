@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.15.3` | Candidate; `0.15.2` remains published |
+| TypeScript     | `typeferry`                   | `0.15.3` | Published; public npm `latest` |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -43,7 +43,7 @@ are outside the accepted shared server scope.
 
 ## TypeScript release
 
-### Browser sleep authentication patch candidate
+### Browser sleep authentication patch
 
 `typeferry@0.15.3` preserves the original age of cross-tab token updates and
 rejects stale, duplicate, and post-logout updates. Browser refresh requests use
@@ -56,24 +56,20 @@ cookie policy, and persisted context shape remain unchanged. Browsers without
 Web Locks retain the existing per-client fallback. Lost refresh responses remain
 a protocol limitation; server refresh-token replay protection stays effective.
 
+The operator published `typeferry@0.15.3` on 2026-10-28. Independent public npm
+checks confirm version and `latest` are `0.15.3`. Registry `gitHead` is signed
+release handoff commit `89a11ffd85058d31273ed3aecbd82a1e9d2a95b4`, which includes
+signed implementation commit `51140ee`. The downloaded 303,825-byte registry
+archive matches the verified candidate's SHA-1, SHA-256, and npm integrity.
+
 See the [contract and verification record](specs/2026-10-28-sleep-session-recovery.md).
-The user owns publication, pushes, and tags. The complete release gate passed
-1,747 unit, 92 integration, and 24 Chromium tests, plus the generic packed
-consumer and 574-file archive validation. Three opt-in Ruby cases were skipped.
+The complete release gate passed 1,747 unit, 92 integration, and 24 Chromium
+tests, plus the generic packed consumer and 574-file archive validation.
+Three opt-in Ruby cases were skipped.
 Audit reported zero vulnerabilities. The contract records warnings, limitations,
-and archive checksums. This candidate has not been published. Consumers must
-wait for the registry artifact before final dependency adoption.
-
-Signed implementation commit: `51140ee`. The candidate archive remains
-byte-identical after that commit. From the clean repository root, publish with:
-
-```sh
-MISE_GO_SET_GOROOT=false just publish-npm
-```
-
-The recipe checks registry authentication and immutable-version availability
-and repeats the full gate before uploading. No push, tag, or upload was performed
-during preparation.
+and archive checksums. Consumers can now adopt the public registry release and
+run their own compatibility checks. The agent verified publication; it did not
+publish, push, or tag the release.
 
 ### Authenticated cache security release
 
@@ -93,9 +89,9 @@ vulnerabilities. Python, Rust, Ruby, and Go package checks also passed. The
 verified archive contains 574 allowed files. See the specification for checksums
 and the preparation environment workaround. The temporary Go module cache was
 removed after publication verification; the archive and verification records remain.
-The public registry confirms `latest` is `0.15.2` and `gitHead` is implementation
-commit `5c9bbc5e12779ce54da12f7d423d4d2e9b7ed665`. The downloaded registry tarball
-is byte-identical to the verified candidate. The agent verified publication but
+Publication verification confirmed `latest` was `0.15.2` and `gitHead` was
+implementation commit `5c9bbc5e12779ce54da12f7d423d4d2e9b7ed665`. The downloaded
+registry tarball is byte-identical to the verified candidate. The agent verified publication but
 did not publish, push, or tag the release.
 
 TypeFerry is published publicly on npm at `0.13.0` (verified against the

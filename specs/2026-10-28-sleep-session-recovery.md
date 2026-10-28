@@ -18,10 +18,10 @@ A delayed cross-tab token update cannot make an expired access token appear
 fresh or replace a newer credential. Browser tabs coordinate demonstrated
 overlapping refresh work without weakening server replay detection.
 
-The current receiver stamps `_tokenReceivedAt` with its receipt time. A queued
-update issued one day earlier with a 15-minute TTL therefore passes the local
-expiry check. Current refresh single-flight ownership applies only to one
-client instance, although tabs share the refresh cookie.
+Before this fix, the receiver stamped `_tokenReceivedAt` with its receipt time.
+A queued update issued one day earlier with a 15-minute TTL therefore passed
+the local expiry check. Refresh single-flight ownership applied only to one
+client instance, although tabs shared the refresh cookie.
 
 ## Contracts and scope
 
@@ -63,10 +63,9 @@ Lost HTTP refresh responses remain a protocol limitation.
 
 ## Release and rollback
 
-The user owns npm publication, pushes, and tags. Prepare a new patch version
-only after verifying that the version is absent from the registry. Run the
-existing guarded release verification without uploading. Record the signed
-source commit and candidate checksums before handoff.
+The operator published `typeferry@0.15.3` on 2026-10-28. Public npm metadata and
+the downloaded archive independently confirm the published identity below.
+The agent verified publication; it did not publish, push, or tag the release.
 
 Consumers own downstream compatibility checks. Producer tooling must not invoke
 consumer repositories. Rollback selects the prior published package; no data
@@ -80,8 +79,8 @@ migration is needed. Published versions are immutable.
 - [x] Prepare a signed patch release and report archive identity.
 
 All five local acceptance criteria passed. Signed implementation commit
-`51140ee` contains the verified source and version bump. This status records
-local implementation readiness; publication remains with the user.
+`51140ee` contains the verified source and version bump. The operator published
+the release from signed handoff commit `89a11ff`.
 
 | Criterion | Executed evidence |
 | --- | --- |
@@ -110,16 +109,28 @@ only the convergence test changed: it now verifies the actual broadcast's
 receipt timestamp instead of assuming two `Date.now()` calls are equal.
 Its 14 cases, scoped lint, strict typecheck, and diff checks passed again.
 
-The audit reported zero vulnerabilities. Registry verification confirmed
-`0.15.3` was available, while `0.15.2` remained latest. Existing warnings cover
-deprecated stub packages and unapproved scripts in the disposable generic
+The audit reported zero vulnerabilities. Before publication, registry checks
+confirmed `0.15.3` was available, while `0.15.2` remained latest. Existing
+warnings cover deprecated stub packages and unapproved scripts in the disposable generic
 consumer. No script approvals or publication guards changed. Temporary
 MongoDB, Redis, and generic-consumer resources were removed; existing services
 were preserved. Independent source review found no blocking correctness issues.
 
-## Candidate identity
+## Published identity
 
-The compiled archive contains 574 allowed files and is 303,825 bytes.
+Public npm confirms version and `latest` are `0.15.3`. Registry `gitHead` is
+`89a11ffd85058d31273ed3aecbd82a1e9d2a95b4`, the signed release handoff commit.
+The public tarball returned HTTP 200. Its 303,825 bytes match the verified
+candidate's SHA-1, SHA-256, and npm integrity below. The archive contains 574
+allowed files.
+
+Metadata verification used the pinned toolchain from `typeferry-ts/`:
+
+```sh
+MISE_GO_SET_GOROOT=false mise exec -- npm view typeferry@0.15.3 version gitHead dist.shasum dist.integrity dist.tarball --json --registry=https://registry.npmjs.org/
+MISE_GO_SET_GOROOT=false mise exec -- npm view typeferry dist-tags.latest --json --registry=https://registry.npmjs.org/
+```
+
 Public function signatures, production dependency ranges, and wire behavior
 remain unchanged. The version bump is `0.15.2` to `0.15.3`.
 
