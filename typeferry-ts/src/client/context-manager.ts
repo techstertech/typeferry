@@ -107,9 +107,9 @@ export function isTokenExpired(context: TypeFerryContext): boolean {
   if (iat && _tokenReceivedAt) {
     const tokenTtlMs = (exp - iat) * 1000
     const elapsedMs = Date.now() - _tokenReceivedAt
-    return elapsedMs > tokenTtlMs
+    return elapsedMs >= tokenTtlMs
   }
 
   const now = Math.floor(Date.now() / 1000)
-  return exp < now
+  return exp <= now
 }

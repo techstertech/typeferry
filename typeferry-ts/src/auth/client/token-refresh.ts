@@ -1,5 +1,10 @@
 import type { Client } from '../../client'
 import { LogLevel } from '../../client/logger'
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  RequestLifetime,
+} from '../../client/request-lifetime'
+import { ClientEvents } from '../../utils'
 import type { TokenRefreshConfig } from '../types'
 import { broadcastTokenRefresh, setupCrossTabSync } from './cross-tab-sync'
 
@@ -71,6 +76,83 @@ function isAuthFailureError(
   return false
 }
 
+interface RefreshResult {
+  readonly accessToken: string
+  readonly exp: number
+  readonly iat: number
+}
+
+/**
+ * The refresh cookie belongs to the browser origin, not an individual tab.
+ * Hold one browser lock through each HTTP response so concurrent tabs cannot
+ * rotate the same cookie in parallel. Existing per-client ownership remains
+ * the fallback where Web Locks are unavailable or synchronization is disabled.
+ */
+async function requestRefresh(
+  client: Client,
+  config: TokenRefreshConfig,
+): Promise<RefreshResult> {
+  const context = client.context
+  const request = (lifetime?: RequestLifetime): Promise<RefreshResult> =>
+    client.call<Record<string, never>, RefreshResult>(
+      config.refreshMethod,
+      {},
+      {
+        ignoreInit: true,
+        http: true,
+        ...(lifetime ? { signal: lifetime.signal, timeout: lifetime.remaining() } : {}),
+      },
+    )
+  const locks =
+    typeof window === 'undefined' || typeof navigator === 'undefined'
+      ? undefined
+      : navigator.locks
+
+  if (!locks || !config.broadcastChannelName) return request()
+
+  const lifetime = new RequestLifetime(DEFAULT_REQUEST_TIMEOUT_MS)
+  let waiting = true
+
+  const cancel = (): void => {
+    lifetime.cancel(new DOMException(
+      'TypeFerry: Session changed during token refresh',
+      'AbortError',
+    ))
+  }
+  const contextChanged = (): void => {
+    /**
+     * A peer can publish credentials after this request rotated the cookie.
+     * Let a sent response deliver its replacement cookie. The outer context
+     * identity check still prevents stale credential publication.
+     */
+    if (client.context !== context && (waiting || !client.context.token)) cancel()
+  }
+
+  client.on(ClientEvents.CLOSE, cancel)
+  client.on(ClientEvents.LOGOUT, cancel)
+  client.on(ClientEvents.CONTEXT_CHANGED, contextChanged)
+
+  try {
+    const name = `typeferry:refresh:${JSON.stringify([config.broadcastChannelName, config.refreshMethod])}`
+
+    return await lifetime.wait(locks.request(name, { signal: lifetime.signal }, () => {
+      waiting = false
+      lifetime.remaining()
+      if (client.context !== context) {
+        throw new Error('TypeFerry: Session changed during token refresh')
+      }
+
+      return request(lifetime)
+    }))
+  } finally {
+    lifetime.dispose()
+
+    client.off(ClientEvents.CLOSE, cancel)
+    client.off(ClientEvents.LOGOUT, cancel)
+    client.off(ClientEvents.CONTEXT_CHANGED, contextChanged)
+  }
+}
+
 /**
  * Refresh the access token using the configured refresh method.
  * Handles concurrent refresh requests by queueing them per-client.
@@ -108,17 +190,7 @@ export async function refreshAccessToken(
       exp: client.context.exp,
     })
 
-    const result = await client.call<
-      Record<string, never>,
-      { accessToken: string; exp: number; iat: number }
-    >(
-      opts.refreshMethod,
-      {},
-      {
-        ignoreInit: true,
-        http: true,
-      },
-    )
+    const result = await requestRefresh(client, opts)
 
     if (client.context !== context) {
       throw new Error('TypeFerry: Session changed during token refresh')
@@ -189,12 +261,15 @@ export function setupTokenRefreshOnExpiry(
 ): () => void {
   const opts = { ...defaultConfig, ...config }
   let refreshTimeout: ReturnType<typeof setTimeout> | null = null
+  let active = true
 
   const cleanupCrossTab = opts.broadcastChannelName
     ? setupCrossTabSync(client, { channelName: opts.broadcastChannelName })
     : () => {}
 
   const scheduleRefresh = (): void => {
+    if (!active) return
+
     if (refreshTimeout) {
       clearTimeout(refreshTimeout)
       refreshTimeout = null
@@ -242,7 +317,7 @@ export function setupTokenRefreshOnExpiry(
           err,
         )
 
-        if (!isAuthFailureError(err)) {
+        if (active && !isAuthFailureError(err)) {
           refreshTimeout = setTimeout(scheduleRefresh, RETRY_DELAY_MS)
         }
       })
@@ -281,6 +356,8 @@ export function setupTokenRefreshOnExpiry(
 
   // Cleanup function
   return () => {
+    active = false
+
     if (refreshTimeout) {
       clearTimeout(refreshTimeout)
     }

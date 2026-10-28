@@ -1,6 +1,11 @@
 import { getAbortReason, throwIfAborted } from '../utils/abort'
 
 /**
+ * @internal Shared deadline for a call and any prerequisite transport work.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 20_000
+
+/**
  * Owns one opt-in request's deadline and cancellation through its completion.
  * Admission policy remains with the application; late waits cannot revive work.
  */

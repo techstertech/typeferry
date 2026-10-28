@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28
+
+- fix(auth): preserve token age and serialize browser refresh recovery
+
 ## 2026-10-24
 
 - security(server): bypass method caching for authenticated calls

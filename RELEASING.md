@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.15.2` | Published |
+| TypeScript     | `typeferry`                   | `0.15.3` | Candidate; `0.15.2` remains published |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -42,6 +42,27 @@ adapter dependencies. MongoDB live views, a Go client and extra OAuth providers
 are outside the accepted shared server scope.
 
 ## TypeScript release
+
+### Browser sleep authentication patch candidate
+
+`typeferry@0.15.3` preserves the original age of cross-tab token updates and
+rejects stale, duplicate, and post-logout updates. Browser refresh requests use
+one origin-scoped lock across each HTTP response. Lock acquisition and HTTP
+share the existing 20-second request budget. Exact expiry matches server JWT
+validation, and scheduler cleanup prevents later retry dispatch.
+
+Public function signatures, declared dependency ranges, the server protocol,
+cookie policy, and persisted context shape remain unchanged. Browsers without
+Web Locks retain the existing per-client fallback. Lost refresh responses remain
+a protocol limitation; server refresh-token replay protection stays effective.
+
+See the [contract and verification record](specs/2026-10-28-sleep-session-recovery.md).
+The user owns publication, pushes, and tags. The complete release gate passed
+1,747 unit, 92 integration, and 24 Chromium tests, plus the generic packed
+consumer and 574-file archive validation. Three opt-in Ruby cases were skipped.
+Audit reported zero vulnerabilities. The contract records warnings, limitations,
+and archive checksums. This candidate has not been published. Consumers must
+wait for the registry artifact before final dependency adoption.
 
 ### Authenticated cache security release
 

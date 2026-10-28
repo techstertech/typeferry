@@ -120,6 +120,7 @@ describe('typeferry token refresh', () => {
       token: 'new-token',
       exp: 1234567890,
       iat,
+      receivedAt: expect.any(Number),
     })
   })
 
@@ -598,6 +599,34 @@ describe('setupTokenRefreshOnExpiry cleanup', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     delete (globalThis as any).BroadcastChannel
+  })
+
+  it('does not restart retry scheduling when a pending refresh fails after cleanup', async () => {
+    const client = new MockClient()
+    const nowSec = 1_000_000_000
+    vi.setSystemTime(nowSec * 1000)
+    client.context = { token: 'expiring-token', exp: nowSec + 30 }
+
+    let fail: (error: Error) => void = () => {
+      throw new Error('Refresh request not started')
+    }
+    client.call.mockImplementation(() =>
+      new Promise<never>((_resolve, reject) => {
+        fail = reject
+      }),
+    )
+
+    const cleanup = setupTokenRefreshOnExpiry(
+      client as unknown as Parameters<typeof setupTokenRefreshOnExpiry>[0],
+      { broadcastChannelName: '' },
+    )
+
+    cleanup()
+    fail(new Error('Refresh cancelled after unmount'))
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(client.call).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('clears timers and removes context:changed listener', () => {

@@ -26,7 +26,7 @@ import { IdleTimer } from './idle-timer'
 import type { TypeFerryLogger } from './logger'
 import { logger, LogLevel } from './logger'
 import { VisibilityManager } from './visibility-manager'
-import { RequestLifetime } from './request-lifetime'
+import { DEFAULT_REQUEST_TIMEOUT_MS, RequestLifetime } from './request-lifetime'
 type Timeout = ReturnType<typeof setTimeout>
 
 export type ErrorHandler = (error: unknown) => unknown
@@ -493,7 +493,7 @@ export class Client<
   }
 
   private static readonly DEFAULT_CALL_OPTIONS = {
-    timeout: 20000,
+    timeout: DEFAULT_REQUEST_TIMEOUT_MS,
     http: false,
     httpFallback: true,
     ignoreInit: false,

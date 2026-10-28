@@ -217,6 +217,24 @@ describe('isTokenExpired', () => {
     expect(isTokenExpired({ exp: now + 300 })).toBe(false)
   })
 
+  it('matches server expiry at the exact exp second', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+
+    expect(isTokenExpired({ exp: Date.now() / 1000 })).toBe(true)
+  })
+
+  it('matches server expiry at the exact elapsed lifetime with clock skew', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+
+    expect(isTokenExpired({
+      iat: 500_000,
+      exp: 500_900,
+      _tokenReceivedAt: Date.now() - 900_000,
+    })).toBe(true)
+  })
+
   it('should use clock-skew-safe check when iat and _tokenReceivedAt are present', () => {
     vi.useFakeTimers()
     const nowMs = 1_000_000_000_000

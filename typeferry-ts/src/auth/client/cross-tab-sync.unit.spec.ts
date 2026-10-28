@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Client } from '../../client'
+import {
+  ContextManager,
+  isTokenExpired,
+  type TypeFerryContext,
+} from '../../client/context-manager'
 import { broadcastTokenRefresh, setupCrossTabSync } from './cross-tab-sync'
 
 // ---------------------------------------------------------------------------
@@ -53,7 +59,9 @@ function latestChannel(): BroadcastChannelMock {
 
 function createMockClient() {
   return {
+    context: { token: 'current-token' },
     updateContext: vi.fn(),
+    setContext: vi.fn(),
     emit: vi.fn(),
   }
 }
@@ -122,14 +130,14 @@ describe('cross-tab-sync', () => {
         exp: 1700000000,
       })
 
-      expect(client.updateContext).toHaveBeenCalledOnce()
-      expect(client.updateContext).toHaveBeenCalledWith({
+      expect(client.setContext).toHaveBeenCalledOnce()
+      expect(client.setContext).toHaveBeenCalledWith({
         token: 'new-jwt',
         exp: 1700000000,
       })
     })
 
-    it('includes iat and _tokenReceivedAt when iat is present in the message', () => {
+    it('uses issuance time when a legacy sender has no clock-skew anchor', () => {
       const client = createMockClient()
       const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(9999999)
 
@@ -147,7 +155,7 @@ describe('cross-tab-sync', () => {
         token: 'jwt-with-iat',
         exp: 1700000000,
         iat: 1699990000,
-        _tokenReceivedAt: 9999999,
+        _tokenReceivedAt: 1699990000 * 1000,
       })
 
       nowSpy.mockRestore()
@@ -165,7 +173,7 @@ describe('cross-tab-sync', () => {
         iat: 'not-a-number',
       })
 
-      expect(client.updateContext).toHaveBeenCalledWith({
+      expect(client.setContext).toHaveBeenCalledWith({
         token: 'tok',
         exp: 100,
       })
@@ -288,6 +296,7 @@ describe('cross-tab-sync', () => {
         token: 'my-token',
         exp: 1700000000,
         iat: undefined,
+        receivedAt: expect.any(Number),
       })
 
       expect(channel.close).toHaveBeenCalledOnce()
@@ -303,6 +312,7 @@ describe('cross-tab-sync', () => {
         token: 'tok',
         exp: 2000,
         iat: 1000,
+        receivedAt: expect.any(Number),
       })
     })
 
@@ -323,5 +333,164 @@ describe('cross-tab-sync', () => {
 
       expect(postOrder).toBeLessThan(closeOrder)
     })
+  })
+})
+
+describe('delayed cross-tab token delivery', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    BroadcastChannelMock.reset()
+    vi.stubGlobal('BroadcastChannel', BroadcastChannelMock)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function tokenContext(
+    issuedAt: number,
+    receivedAt = issuedAt * 1000,
+  ): TypeFerryContext {
+    return {
+      token: `token-${issuedAt}`,
+      iat: issuedAt,
+      exp: issuedAt + 900,
+      _tokenReceivedAt: receivedAt,
+    }
+  }
+
+  function receive(context: TypeFerryContext, receivedAt?: number): void {
+    latestChannel().simulateMessage({
+      type: 'TOKEN_REFRESHED',
+      token: context.token,
+      iat: context.iat,
+      exp: context.exp,
+      ...(receivedAt === undefined ? {} : { receivedAt }),
+    })
+  }
+
+  function syncContext(context: TypeFerryContext): ContextManager {
+    const manager = new ContextManager()
+    manager.setContext(context)
+
+    const client = {
+      get context(): TypeFerryContext {
+        return manager.context
+      },
+      updateContext: manager.updateContext.bind(manager),
+      setContext: manager.setContext.bind(manager),
+    } as unknown as Client
+
+    setupCrossTabSync(client, { channelName: 'session' })
+
+    return manager
+  }
+
+  it('includes the sender timestamp in the existing broadcast', () => {
+    const issuedAt = Date.now() / 1000
+
+    broadcastTokenRefresh('session', `token-${issuedAt}`, issuedAt + 900, issuedAt)
+
+    expect(latestChannel().postMessage).toHaveBeenCalledWith({
+      type: 'TOKEN_REFRESHED',
+      token: `token-${issuedAt}`,
+      iat: issuedAt,
+      exp: issuedAt + 900,
+      receivedAt: Date.now(),
+    })
+  })
+
+  it('preserves the sender receipt time after sleep', () => {
+    const issuedAt = Date.now() / 1000 - 3600
+    const manager = syncContext(tokenContext(issuedAt - 900))
+
+    receive(tokenContext(issuedAt), issuedAt * 1000)
+
+    expect(manager.context._tokenReceivedAt).toBe(issuedAt * 1000)
+    expect(isTokenExpired(manager.context)).toBe(true)
+  })
+
+  it('keeps timely delivery independent of server clock skew', () => {
+    const issuedAt = Date.now() / 1000 - 14_400
+    const receivedAt = Date.now() - 120_000
+    const manager = syncContext(tokenContext(issuedAt - 900, receivedAt - 900_000))
+
+    receive(tokenContext(issuedAt), receivedAt)
+
+    expect(manager.context._tokenReceivedAt).toBe(receivedAt)
+    expect(isTokenExpired(manager.context)).toBe(false)
+
+    vi.advanceTimersByTime(781_000)
+
+    expect(isTokenExpired(manager.context)).toBe(true)
+  })
+
+  it('does not overwrite newer credentials', () => {
+    const issuedAt = Date.now() / 1000
+    const context = tokenContext(issuedAt)
+    const manager = syncContext(context)
+
+    receive(tokenContext(issuedAt - 60), Date.now())
+
+    expect(manager.context).toBe(context)
+  })
+
+  it('orders rotations from the same second by receipt time', () => {
+    const context = tokenContext(Date.now() / 1000)
+    const manager = syncContext(context)
+
+    receive({ ...context, token: 'older-rotation' }, Date.now() - 1)
+
+    expect(manager.context).toBe(context)
+  })
+
+  it('does not renew the age of an identical token', () => {
+    const context = tokenContext(Date.now() / 1000 - 120)
+    const manager = syncContext(context)
+
+    receive(context, Date.now())
+
+    expect(manager.context).toBe(context)
+  })
+
+  it('does not resurrect terminal logout', () => {
+    const manager = syncContext(tokenContext(Date.now() / 1000 - 600))
+    manager.clearContext()
+
+    receive(tokenContext(Date.now() / 1000), Date.now())
+
+    expect(manager.context).toEqual({})
+  })
+
+  it('preserves legacy sender age through an existing clock-skew anchor', () => {
+    const issuedAt = Date.now() / 1000 - 14_400
+    const receivedAt = Date.now() - 120_000
+    const manager = syncContext(tokenContext(issuedAt - 900, receivedAt - 900_000))
+
+    receive(tokenContext(issuedAt))
+
+    expect(manager.context._tokenReceivedAt).toBe(receivedAt)
+    expect(isTokenExpired(manager.context)).toBe(false)
+  })
+
+  it('does not grant a fresh lifetime to a legacy sender without a clock anchor', () => {
+    const issuedAt = Date.now() / 1000 - 3600
+    const manager = syncContext({ token: 'legacy-context' })
+
+    receive(tokenContext(issuedAt))
+
+    expect(isTokenExpired(manager.context)).toBe(true)
+  })
+
+  it('clears obsolete timing metadata for a legacy sender without iat', () => {
+    const manager = syncContext(tokenContext(Date.now() / 1000 - 600))
+    const exp = Date.now() / 1000 + 600
+
+    receive({ token: 'legacy-token', exp })
+
+    expect(manager.context).toEqual({ token: 'legacy-token', exp })
   })
 })
