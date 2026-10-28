@@ -1,12 +1,13 @@
 ---
-status: validating
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-10-28
 updated: 2026-10-28
 owner: typescript-auth
 implementation:
-  commits: []
+  commits:
+    - 51140ee
 ---
 
 # Preserve token age through browser sleep
@@ -76,10 +77,11 @@ migration is needed. Published versions are immutable.
 - [x] Add failing regressions before changing runtime behavior.
 - [x] Implement and review the smallest auth-slice correction.
 - [x] Complete focused checks and the existing release gate.
-- [ ] Prepare a signed patch release and report archive identity.
+- [x] Prepare a signed patch release and report archive identity.
 
-All five local acceptance criteria passed. The source is ready for its signed
-implementation commit. Publication remains with the user.
+All five local acceptance criteria passed. Signed implementation commit
+`51140ee` contains the verified source and version bump. This status records
+local implementation readiness; publication remains with the user.
 
 | Criterion | Executed evidence |
 | --- | --- |

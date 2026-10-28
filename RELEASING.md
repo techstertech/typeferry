@@ -64,6 +64,17 @@ Audit reported zero vulnerabilities. The contract records warnings, limitations,
 and archive checksums. This candidate has not been published. Consumers must
 wait for the registry artifact before final dependency adoption.
 
+Signed implementation commit: `51140ee`. The candidate archive remains
+byte-identical after that commit. From the clean repository root, publish with:
+
+```sh
+MISE_GO_SET_GOROOT=false just publish-npm
+```
+
+The recipe checks registry authentication and immutable-version availability
+and repeats the full gate before uploading. No push, tag, or upload was performed
+during preparation.
+
 ### Authenticated cache security release
 
 The operator published `typeferry@0.15.2` on 2026-10-24. Authenticated
