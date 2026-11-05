@@ -15,6 +15,9 @@ implementation:
     - 704d9af
     - 32e82b1
     - 8179582
+    - 6da3285
+    - 895a046
+    - bba7583
 ---
 
 # Protocol compliance defect corrections
@@ -156,13 +159,13 @@ do not roll back dependency security fixes without a safe replacement.
 
 ## Verification results
 
-All acceptance criteria passed for the delivered correction set. This record
-does not claim that finite fixture coverage proves every possible protocol input.
+All acceptance criteria passed for the delivered correction set. Finite fixture
+coverage does not prove every possible protocol input.
 
 | ID | Result and executed evidence |
 |---|---|
 | A1 | Passed: native HTTP/WS regressions cover omitted/empty allowlists, missing/empty/matching/mismatching headers, independent opt-ins, and rejection before callbacks or quota. |
-| A2 | Passed: falsey scalar/container checks, pending and cancellation-resistant callbacks, no late authentication, and protected-call rejection. A real TypeScript regression additionally proved and corrected authorization retained after context installation or an authentication listener threw. |
+| A2 | Passed: falsey scalar/container checks, pending and cancellation-resistant callbacks, no late authentication, and protected-call rejection. Real TypeScript regressions prove failed context/listener installation cannot retain authority, truthy identities need no user ID, and logout retires user delivery membership. Python identity replacement and deauthentication also retire old principals. |
 | A3 | Passed: invalid UUID replacement, literal tag-shaped metadata, raw UTF-8 bounds, and compact number spellings whose normalized output exceeds the raw budget. |
 | A4 | Passed: shared ordinary/canonical fixtures replay across all five languages, including numeric index boundaries, UTF-16 ordering, nested values, and cache-key checks. |
 | A5 | Passed: shared full-range date fixture, real JS client/Rust date echo, checked chrono conversion, Python datetime precision/equality, generated short binary round trips, malformed base64, and invalid date coercion. |
@@ -174,11 +177,11 @@ does not claim that finite fixture coverage proves every possible protocol input
 Executed package checks:
 
 - TypeScript: `npm run lint`, `npm run typecheck`,
-  `npm run test:unit -- --no-file-parallelism` (1792 tests),
+  `npm run test:unit -- --no-file-parallelism` (1802 tests),
   `npm run test:integration` (99), `npm run test:browser` (24),
   `npm run build`, `npm pack --dry-run`, `node ../scripts/verify-npm-package.mjs`
   (577 allowed files), and `npm run verify:consumer` (build, test, runtime imports).
-- Python: `python -m pytest` (312), `ruff check .`, and `python -m mypy`
+- Python: `python -m pytest` (318), `ruff check .`, and `python -m mypy`
   (53 source files).
 - Ruby: `bundle exec rake verify` with an owned Redis instance (118 tests,
   440 assertions, no skips), Steep, Standard, gem build, and package inspection.
@@ -190,10 +193,13 @@ Executed package checks:
 - Go: `go test -count=1 ./...`, `go test -race -count=1 ./...`, `go vet ./...`,
   and live Redis integration under the race detector.
 - Root: `python -m pytest scripts -q` (21) and `git diff --check`.
+- Compiled JavaScript manual check: 15 identity values over real HTTP and WS
+  connections matched JavaScript truthiness and protected-method admission.
 - Post-work automation: `just verify-shared-fixtures` ran every native consumer;
   TypeScript replayed 38 EJSON checks plus 23 HTTP/WS cases, Python passed 64,
   Rust replayed all families and handshake checks, Ruby passed 45, and all four
   Go fixture packages passed. The updated mastery guidance passed its validator.
+  Go test-result caching is disabled for the fixture replay command.
 
 Fresh `npm audit` checks for both independent npm graphs, `pip-audit`, updated
 `bundler-audit`, `cargo audit`, and source/module `govulncheck` scans reported no
@@ -204,6 +210,9 @@ dependencies; Rust's existing Redis crate was added only to conformance tests.
 
 - Strict configured origin admission and empty-list behavior are deliberate
   security corrections. Originless callers must use the explicit transport opt-in.
+- Authentication is independent of optional user IDs. Return a falsey value to
+  reject an identity; contexts without `user._id` are authenticated but unindexed.
+  Context replacement, deauthentication, and logout retire previous principals.
 - Rust date construction changes from `EjsonValue::Date(date_time)` to
   `EjsonValue::Date(date_time.into())`; `to_chrono()` is checked. Python wide dates
   are opaque round-trip values; ordinary dates remain `datetime` objects.
