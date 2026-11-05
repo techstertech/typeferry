@@ -25,7 +25,7 @@ verify-shared-fixtures:
     cd typeferry-py && .venv/bin/python -m pytest tests/conformance
     cd typeferry-rs && cargo test --locked -p typeferry-conformance
     cd typeferry-rb && mise exec -- ruby "$(mise which bundle)" exec "$(mise which ruby)" -S rake test:conformance
-    cd typeferry-go && go test ./ejson ./httptransport ./websocket ./redistransport
+    cd typeferry-go && go test -count=1 ./ejson ./httptransport ./websocket ./redistransport
 
 # Run the complete non-uploading npm release and artifact gate.
 verify-npm-release: install-npm-toolchain

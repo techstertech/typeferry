@@ -13,6 +13,7 @@
 - fix(typescript): preserve identities and retire stale principals
 - test(release): remove stale version and source assumptions
 - test(protocol): add shared fixture verification gate
+- test(protocol): force fresh Go fixture replay
 
 ## 2026-10-28
 

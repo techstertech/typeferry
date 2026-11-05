@@ -27,6 +27,7 @@ Python `.[dev,all]` dependencies in `typeferry-py/.venv`, the Ruby bundle, and
 Rust/Go toolchains first. The recipe stops on any failed command. It does not
 replace full package suites, live Redis lifecycle checks, cross-language client
 tests, or a review of requirements missing from fixtures.
+The Go step disables test-result caching so it always reads current fixtures.
 
 From `typeferry-ts/`:
 
