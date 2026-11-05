@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MessageType, Presentation, ServerEvents } from '../utils'
-import { ClientNode } from './client-node'
+import { ClientNode, type ClientNodeContext } from './client-node'
 import { SocketState } from './types'
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,7 @@ function createMockSocket(readyState: number = SocketState.OPEN) {
 function createMockServer(overrides: Record<string, any> = {}) {
   return {
     indexClientByUserId: vi.fn(),
+    removeClientFromUserIndex: vi.fn(),
     emit: vi.fn(),
     ...overrides,
   } as any
@@ -93,6 +94,30 @@ describe('ClientNode', () => {
     })
   })
 
+  it('retires the current principal immediately when authentication is cleared', () => {
+    const node = new ClientNode(server)
+    const removed: Array<string | null> = []
+
+    server.removeClientFromUserIndex.mockImplementation((client: ClientNode) => {
+      removed.push(client.userId)
+      expect(client.context).toEqual({ user: { _id: 'previous' } })
+    })
+    node.authenticated = true
+    node.setContext({ user: { _id: 'previous' } })
+
+    node.authenticated = false
+
+    expect(node.authenticated).toBe(false)
+    expect(node.context).toEqual({})
+    expect(node.userId).toBeNull()
+    expect(node.user).toBeNull()
+    expect(removed).toEqual(['previous'])
+
+    node.authenticated = false
+
+    expect(removed).toEqual(['previous'])
+  })
+
   describe('readyState', () => {
     it('returns socket readyState', () => {
       const socket = createMockSocket(SocketState.OPEN)
@@ -135,6 +160,88 @@ describe('ClientNode', () => {
       node.setContext({ user: { _id: 'u1' } })
 
       expect(node.context).toEqual({})
+    })
+  })
+
+  describe('user identity transitions', () => {
+    it('retires the previous user index before installing a different context', () => {
+      const node = new ClientNode(server)
+      const previous: ClientNodeContext = { user: { _id: 'previous' } }
+      const replacement: ClientNodeContext = { user: { _id: 42 } }
+      const changes: Array<[string, string | null]> = []
+
+      server.indexClientByUserId.mockImplementation((client: ClientNode) => {
+        changes.push(['index', client.userId])
+      })
+      server.removeClientFromUserIndex.mockImplementation((client: ClientNode) => {
+        changes.push(['remove', client.userId])
+        expect(client.context).toEqual(previous)
+      })
+      node.authenticated = true
+      node.setContext(previous)
+
+      node.setContext(replacement)
+
+      expect(changes).toEqual([['index', 'previous'], ['remove', 'previous'], ['index', '42']])
+      expect(node.context).toEqual(replacement)
+      expect(node.user).toEqual(replacement.user)
+      expect(node.userId).toBe('42')
+    })
+
+    it.each<ClientNodeContext | null>([null, {}, { user: {} }])(
+      'removes the previous user index when its context is cleared: %j',
+      context => {
+        const node = new ClientNode(server)
+        const removed: Array<string | null> = []
+
+        server.removeClientFromUserIndex.mockImplementation((client: ClientNode) => {
+          removed.push(client.userId)
+        })
+        node.authenticated = true
+        node.setContext({ user: { _id: 'previous' } })
+
+        node.setContext(context)
+
+        expect(removed).toEqual(['previous'])
+        expect(node.userId).toBeNull()
+        expect(node.user).toBeNull()
+        expect(server.indexClientByUserId).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    it('removes the previous user index after authentication is cleared', () => {
+      const node = new ClientNode(server)
+      const removed: Array<string | null> = []
+
+      server.removeClientFromUserIndex.mockImplementation((client: ClientNode) => {
+        removed.push(client.userId)
+      })
+      node.authenticated = true
+      node.setContext({ user: { _id: 'previous' } })
+      node.authenticated = false
+      node.setContext(null)
+
+      expect(removed).toEqual(['previous'])
+      expect(node.context).toEqual({})
+      expect(node.userId).toBeNull()
+      expect(node.user).toBeNull()
+    })
+
+    it('retires the previous index when setUserId refreshes a changed user', () => {
+      const node = new ClientNode(server)
+      const removed: Array<string | null> = []
+
+      server.removeClientFromUserIndex.mockImplementation((client: ClientNode) => {
+        removed.push(client.userId)
+      })
+      node.authenticated = true
+      node.setContext({ user: { _id: 'previous' } })
+      node.context = { user: { _id: 'replacement' } }
+
+      node.setUserId()
+
+      expect(removed).toEqual(['previous'])
+      expect(node.userId).toBe('replacement')
     })
   })
 
@@ -201,25 +308,21 @@ describe('ClientNode', () => {
       expect(server.indexClientByUserId).not.toHaveBeenCalled()
     })
 
-    it('throws when authenticated but context has no user._id', () => {
-      const node = new ClientNode(server)
-      node.authenticated = true
-      node.context = { user: {} }
+    it.each<ClientNodeContext>([{}, { user: {} }])(
+      'keeps an authenticated context without a user ID unindexed: %j',
+      context => {
+        const node = new ClientNode(server)
+        node.authenticated = true
+        node.context = context
 
-      expect(() => node.setUserId()).toThrow(
-        'The auth function must return a user object with a valid "_id" property'
-      )
-    })
-
-    it('throws when authenticated but context has no user at all', () => {
-      const node = new ClientNode(server)
-      node.authenticated = true
-      node.context = {}
-
-      expect(() => node.setUserId()).toThrow(
-        'The auth function must return a user object with a valid "_id" property'
-      )
-    })
+        expect(() => node.setUserId()).not.toThrow()
+        expect(node.authenticated).toBe(true)
+        expect(node.context).toEqual(context)
+        expect(node.userId).toBeNull()
+        expect(node.user).toBeNull()
+        expect(server.indexClientByUserId).not.toHaveBeenCalled()
+      },
+    )
 
     it('converts userId to string', () => {
       const node = new ClientNode(server)

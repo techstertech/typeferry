@@ -354,7 +354,11 @@ describe('protocol rate-limit headers', () => {
 it.each([
   {
     name: 'context installation',
-    context: { user: {} },
+    context: {
+      get user(): never {
+        throw new Error('expected context failure')
+      },
+    },
     listenerThrows: false,
   },
   {
@@ -397,5 +401,82 @@ it.each([
     socket.close()
     await server.close()
     log.mockRestore()
+  }
+})
+
+it.each([{}, { user: {} }])(
+  'accepts a truthy identity without a user ID: %j',
+  async (context) => {
+    const server = await startServer()
+
+    server.setAuth({ auth: async () => context, logIn: async () => true })
+    server.addMethod(
+      RPC_METHOD,
+      async function () {
+        return { authenticated: this.authenticated, userId: this.userId }
+      },
+      { protected: true },
+    )
+
+    const socket = new WebSocket(
+      `ws://${HOST}:${server.port}/typeferry-ws?token=identity`,
+    )
+
+    try {
+      expect(await nextFrame(socket)).toEqual({
+        t: 'auth',
+        authenticated: true,
+      })
+
+      const response = nextFrame(socket)
+
+      socket.send(
+        Presentation.encode({ t: 'rpc', id: 'truthy', method: RPC_METHOD }),
+      )
+      expect(await response).toEqual({
+        t: 'rpc:res',
+        id: 'truthy',
+        result: { authenticated: true, userId: null },
+      })
+
+      const http = await rpcRequest(server)
+      const envelope: unknown = await http.json()
+
+      expect(envelope).toMatchObject({
+        type: 'result',
+        result: { authenticated: true, userId: null },
+      })
+    } finally {
+      socket.close()
+      await server.close()
+    }
+  },
+)
+
+it('retires user delivery membership when rpc:logout deauthenticates a client', async () => {
+  const server = await startServer()
+
+  server.setAuth({
+    auth: async () => ({ user: { _id: 'boundary-user' } }),
+    logIn: async () => true,
+  })
+  const socket = new WebSocket(
+    `ws://${HOST}:${server.port}/typeferry-ws?token=identity`,
+  )
+
+  try {
+    expect(await nextFrame(socket)).toEqual({ t: 'auth', authenticated: true })
+    expect(server.getClientsByUserId('boundary-user').size).toBe(1)
+
+    const response = nextFrame(socket)
+
+    socket.send(
+      Presentation.encode({ t: 'rpc', id: 'logout', method: 'rpc:logout' }),
+    )
+    expect(await response).toEqual({ t: 'rpc:res', id: 'logout', result: true })
+    expect(server.getClientsByUserId('boundary-user').size).toBe(0)
+  } finally {
+    socket.close()
+    await server.close()
   }
 })

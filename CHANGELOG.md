@@ -10,7 +10,7 @@
 - fix(rust): enforce protocol boundaries and full EJSON date support
 - fix(rust): preserve default HTTP origin behavior
 - fix(typescript): enforce fail-closed protocol boundaries
-- fix(typescript): separate authentication from user indexing
+- fix(typescript): preserve identities and retire stale principals
 - test(release): remove stale version and source assumptions
 - test(protocol): add shared fixture verification gate
 

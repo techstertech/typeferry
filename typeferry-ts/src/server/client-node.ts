@@ -71,6 +71,7 @@ export class ClientNode extends EventEmitter2 {
 
   set authenticated(authenticated: boolean) {
     this.isAuthenticated = authenticated
+    if (!authenticated) this.setContext(null)
   }
 
   get readyState(): number | undefined {
@@ -82,6 +83,7 @@ export class ClientNode extends EventEmitter2 {
   }
 
   setContext(context: ClientNodeContext | null) {
+    this.clearUserIdentity()
     this.context = this.authenticated ? context : {}
 
     this.setUserId()
@@ -111,22 +113,29 @@ export class ClientNode extends EventEmitter2 {
       ''
   }
 
-  // The user ID is used for authorizing the user's channel.
+  /**
+   * Refreshes the optional identity used for user-scoped delivery.
+   * Authenticated contexts without a user ID remain valid and unindexed.
+   */
   setUserId() {
+    this.clearUserIdentity()
     if (!this.authenticated) return
 
     const user = this.context?.user
     const userId = user?._id
 
-    if (!userId) {
-      throw new Error(
-        'The auth function must return a user object with a valid "_id" property'
-      )
-    }
+    if (!userId) return
 
     this.userId = String(userId)
     this.user = user
     this.server.indexClientByUserId(this)
+  }
+
+  private clearUserIdentity(): void {
+    if (this.userId !== null) this.server.removeClientFromUserIndex(this)
+
+    this.userId = null
+    this.user = null
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

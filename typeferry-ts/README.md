@@ -155,6 +155,13 @@ Application health and static routes retain their own admission policies.
 When HTTP rate limiting is enabled, RPC responses include `RateLimit-Limit`,
 `RateLimit-Remaining`, and rounded-up relative `RateLimit-Reset` seconds.
 
+### Authentication identities
+
+Return `false` to reject an identity. Successful context objects may omit
+`user._id`. Only contexts with a user ID enter the user delivery index.
+Changing or clearing an identity retires its previous index membership,
+including deauthentication and `rpc:logout`.
+
 ## Development
 
 Run commands from `typeferry-ts/`:

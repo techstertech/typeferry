@@ -749,11 +749,14 @@ reserved.
 Truthiness follows JavaScript: null, false, positive/negative zero, NaN, and
 empty strings fail; arrays and objects succeed even when empty. An unsuccessful
 result MUST NOT retain authenticated context. If the function returns a truthy
-value, the node is marked authenticated and that value becomes `node.context`. Setting
-`node.userId` requires the context contain a `user._id` field
-(`src/server/client-node.ts:98-113`) — this is a TS-side application
-invariant that conformant servers SHOULD match when exposing
-user-scoped events.
+value, the node is marked authenticated and that value becomes `node.context`.
+Authentication does not require a user ID. `node.userId` and the user-delivery
+index are populated only when the context contains a valid `user._id` field.
+Changing or clearing context MUST retire the previous principal's index entry.
+Failures while installing context or notifying authentication listeners MUST
+leave the node unauthenticated, clear its principal, and deny protected RPCs.
+
+Source: `typeferry-ts/src/server/client-node.ts`.
 
 Sources: `src/server/transports/http-transport.ts:90-106`,
 `src/server/transports/bun-hono-transport.ts:223-242`,
