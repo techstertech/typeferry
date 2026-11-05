@@ -104,7 +104,8 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		response.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !handler.originAllowed(request.Header.Get("Origin")) {
+	_, originPresent := request.Header["Origin"]
+	if !handler.originAllowed(request.Header.Get("Origin"), originPresent) {
 		response.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -139,12 +140,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	handler.dispatch(response, request, address, string(body))
 }
 
-func (handler *Handler) originAllowed(origin string) bool {
+func (handler *Handler) originAllowed(origin string, present bool) bool {
 	if handler.origins == nil {
 		return true
 	}
-	if origin == "" {
+	if !present {
 		return handler.options.AllowOriginless
+	}
+	if origin == "" {
+		return false
 	}
 	_, allowed := handler.origins[origin]
 	return allowed

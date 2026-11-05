@@ -60,10 +60,13 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	origin := request.Header.Get("Origin")
+	_, originPresent := request.Header["Origin"]
 	if handler.origins != nil {
 		_, allowed := handler.origins[origin]
-		if origin == "" {
+		if !originPresent {
 			allowed = handler.options.AllowOriginless
+		} else if origin == "" {
+			allowed = false
 		}
 		if !allowed {
 			http.Error(response, "Forbidden", http.StatusForbidden)

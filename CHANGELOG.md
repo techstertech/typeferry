@@ -3,6 +3,7 @@
 ## 2026-11-04
 
 - fix(go): enforce protocol admission and serialization contracts
+- fix(go): reject explicitly empty origin headers
 
 ## 2026-10-28
 

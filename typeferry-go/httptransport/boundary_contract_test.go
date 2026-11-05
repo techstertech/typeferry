@@ -20,16 +20,20 @@ func TestOriginPolicyDistinguishesOmittedAndEmptyAllowlists(t *testing.T) {
 		origin          string
 		allowOriginless bool
 		allowed         bool
+		presentEmpty    bool
 	}{
-		{"omitted missing", nil, "", false, true},
-		{"omitted named", nil, "https://other.test", false, true},
-		{"empty missing", []string{}, "", false, false},
-		{"empty named", []string{}, "https://other.test", false, false},
-		{"empty string is not originless opt-in", []string{""}, "", false, false},
-		{"listed origin", []string{"https://allowed.test"}, "https://allowed.test", false, true},
-		{"missing origin", []string{"https://allowed.test"}, "", false, false},
-		{"originless opt-in", []string{}, "", true, true},
-		{"opt-in never admits named mismatch", []string{}, "https://other.test", true, false},
+		{"omitted missing", nil, "", false, true, false},
+		{"omitted named", nil, "https://other.test", false, true, false},
+		{"empty missing", []string{}, "", false, false, false},
+		{"empty named", []string{}, "https://other.test", false, false, false},
+		{"empty string is not originless opt-in", []string{""}, "", false, false, false},
+		{"listed origin", []string{"https://allowed.test"}, "https://allowed.test", false, true, false},
+		{"missing origin", []string{"https://allowed.test"}, "", false, false, false},
+		{"originless opt-in", []string{}, "", true, true, false},
+		{"opt-in never admits named mismatch", []string{}, "https://other.test", true, false, false},
+		{"present empty is not absent", []string{"https://allowed.test"}, "", true, false, true},
+		{"listed empty does not admit empty header", []string{""}, "", true, false, true},
+		{"omitted allowlist admits empty header", nil, "", false, true, true},
 	} {
 		t.Run(example.name, func(t *testing.T) {
 			server := runtime.NewServer()
@@ -49,7 +53,9 @@ func TestOriginPolicyDistinguishesOmittedAndEmptyAllowlists(t *testing.T) {
 
 			app := New(server, Options{Origins: example.origins, AllowOriginless: example.allowOriginless, RateLimitMax: 1})
 			request := httptest.NewRequest(http.MethodPost, protocol.HTTPPath, strings.NewReader(`{"payload":{"method":"ping"}}`))
-			request.Header.Set("Origin", example.origin)
+			if example.origin != "" || example.presentEmpty {
+				request.Header.Set("Origin", example.origin)
+			}
 			response := httptest.NewRecorder()
 			app.ServeHTTP(response, request)
 			if example.allowed {

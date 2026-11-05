@@ -36,7 +36,8 @@ recursively; method-cache keys use ordinary encoding.
 Both HTTP and WebSocket `Options.Origins` allow any origin when nil. A non-nil
 empty slice denies every named origin. Configured allowlists reject missing
 origins unless that handler sets `AllowOriginless: true`. The HTTP and WebSocket
-flags are independent, and neither flag admits a mismatching named origin.
+flags are independent. Neither flag admits a present empty header or a
+mismatching named origin.
 Origin rejection precedes authentication, body decoding, and quota consumption.
 Enabled HTTP limiters attach `RateLimit-Limit`, `RateLimit-Remaining`, and
 `RateLimit-Reset` to every admitted response. Reset rounds the remaining window
