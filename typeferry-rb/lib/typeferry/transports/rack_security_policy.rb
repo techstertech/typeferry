@@ -21,9 +21,9 @@ module TypeFerry
 
       def origin_allowed?(origin)
         return true unless @origins
-        return @allow_originless if origin.to_s.empty?
+        return @allow_originless if origin.nil?
 
-        @origins.include?(origin)
+        !origin.empty? && @origins.include?(origin)
       end
 
       def read_body(request)

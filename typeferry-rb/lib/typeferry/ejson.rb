@@ -12,6 +12,7 @@ module TypeFerry
     CustomValue = Struct.new(:type_name, :value)
 
     VALID_REGEXP_FLAGS = "gimuy"
+    MAX_ARRAY_INDEX = (2**32) - 2
     TAG_KEYS = [
       ["$date"],
       ["$regexp", "$flags"],
@@ -43,7 +44,7 @@ module TypeFerry
 
       def stringify(value, canonical: false, indent: nil)
         json_value = to_json_value(value)
-        json_value = canonicalize(json_value) if canonical
+        json_value = order_properties(json_value, canonical:)
 
         state = JSON::State.new(
           indent: (indent == true) ? "  " : indent.to_s,
@@ -199,15 +200,25 @@ module TypeFerry
         Base64.strict_decode64(source.tr("-_", "+/"))
       end
 
-      def canonicalize(value)
+      # JSON.stringify enumerates index keys first even in canonical mode.
+      # Other canonical keys compare by UTF-16 units, not Unicode codepoints.
+      def order_properties(value, canonical: false)
         case value
         when Hash
-          value.keys.sort.to_h { |key| [key, canonicalize(value.fetch(key))] }
+          indices, remaining = value.keys.partition { |key| array_index_key?(key) }
+          indices.sort_by!(&:to_i)
+          remaining.sort_by! { |key| key.encode(Encoding::UTF_16BE).bytes } if canonical
+
+          (indices + remaining).to_h { |key| [key, order_properties(value.fetch(key), canonical:)] }
         when Array
-          value.map { |item| canonicalize(item) }
+          value.map { |item| order_properties(item, canonical:) }
         else
           value
         end
+      end
+
+      def array_index_key?(key)
+        key.length <= 10 && /\A(?:0|[1-9][0-9]*)\z/.match?(key) && key.to_i <= MAX_ARRAY_INDEX
       end
     end
   end

@@ -19,9 +19,10 @@ class EJSONFixturesTest < Minitest::Test
       fixture = JSON.parse(File.read(path))
       register_types(fixture)
       value = rehydrate(fixture.fetch("value"))
+      canonical = fixture.fetch("canonical", false)
 
-      assert_equal fixture.fetch("encoded"), TypeFerry::EJSON.stringify(value)
-      assert_equal fixture.fetch("encoded"), TypeFerry::EJSON.stringify(TypeFerry::EJSON.parse(fixture.fetch("encoded")))
+      assert_equal fixture.fetch("encoded"), TypeFerry::EJSON.stringify(value, canonical:)
+      assert_equal fixture.fetch("encoded"), TypeFerry::EJSON.stringify(TypeFerry::EJSON.parse(fixture.fetch("encoded")), canonical:)
     end
   end
 

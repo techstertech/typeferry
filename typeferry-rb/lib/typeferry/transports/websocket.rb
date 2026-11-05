@@ -29,14 +29,13 @@ module TypeFerry
       def open
         @server.add_client(node)
         result = authenticate_with_timeout
-        if result && @handshake_authenticator
-          node.authenticated = true
-          node.set_context(result)
-        end
+        node.authenticated = AuthenticationResult.accepted?(result)
+        node.set_context(node.authenticated ? result : nil)
         @server.redis_transport&.register_client(node) if node.authenticated
         node.emit_auth_result(node.authenticated)
       rescue
         node.authenticated = false
+        node.set_context(nil)
         node.emit_auth_result(false)
       end
 
@@ -72,20 +71,23 @@ module TypeFerry
       private
 
       def authenticate_with_timeout
-        enabled = @handshake_authenticator || (@query["token"] && @server.instance_variable_get(:@auth))
+        token = @query["token"]
+        auth = @server.instance_variable_get(:@auth)
+        enabled = @handshake_authenticator || (token && !token.empty? && auth)
         return unless enabled
 
         worker = Thread.new do
           if @handshake_authenticator
             @handshake_authenticator.call(node, @handshake)
           else
-            @server.authenticate(node, {"token" => @query["token"]})
+            # Only the owner applies the result after the deadline race.
+            # A callback that finishes late cannot authenticate the node.
+            auth.call(node, {"token" => token})
           end
         end
         return worker.value if worker.join(@auth_timeout_ms / 1000.0)
 
         worker.kill
-        worker.join
         nil
       end
 
@@ -127,17 +129,16 @@ module TypeFerry
       end
 
       def sanitize_uuid(value)
-        return SecureRandom.uuid unless value.is_a?(String) && !value.empty? && value.length <= MAX_UUID_LENGTH
+        return SecureRandom.uuid unless value.is_a?(String) && !value.empty? && value.length <= MAX_UUID_LENGTH && !UUID_PATTERN.match?(value)
 
-        cleaned = value.gsub(UUID_PATTERN, "").slice(0, MAX_UUID_LENGTH).to_s
-        cleaned.empty? ? SecureRandom.uuid : cleaned
+        value
       end
 
       def parse_meta(value)
-        return {} unless value.is_a?(String)
+        return {} unless value.is_a?(String) && value.bytesize <= MAX_META_SIZE
 
         parsed = JSON.parse(value)
-        return {} unless parsed.is_a?(Hash) && JSON.generate(parsed).bytesize <= MAX_META_SIZE
+        return {} unless parsed.is_a?(Hash)
 
         parsed
       rescue JSON::ParserError, JSON::GeneratorError

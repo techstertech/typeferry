@@ -61,11 +61,17 @@ run http
 
 Configured origins are enforced for every request; requests without an
 `Origin` header are rejected unless `allow_originless: true` is explicitly set
-for a trusted non-browser integration. Bodies are capped at 4 MiB by default;
+for a trusted non-browser integration. An empty allowlist denies all named
+origins. The HTTP and WebSocket originless options are independent, and neither
+option admits a mismatching named origin. Bodies are capped at 4 MiB by default;
 set `max_body_bytes:` to a smaller application budget. Method handlers can read
 normalized immutable request metadata from `ClientNode#headers`,
 `#remote_address`, and `#user_agent`, and can append response headers through
 `#response_headers`.
+
+Enabled HTTP limits add `RateLimit-Limit`, `RateLimit-Remaining`, and
+`RateLimit-Reset` to admitted responses, including RPC errors and HTTP 429.
+Reset values are relative seconds rounded up from the current quota window.
 
 ## Puma WebSockets
 

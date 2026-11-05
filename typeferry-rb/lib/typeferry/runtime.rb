@@ -4,6 +4,18 @@ require "monitor"
 require "securerandom"
 
 module TypeFerry
+  # Authentication follows JavaScript scalars; empty Ruby containers still
+  # represent successful object results from the shared callback contract.
+  module AuthenticationResult
+    def self.accepted?(value)
+      return false if value.nil? || value == false || value == ""
+      return false if value.is_a?(Numeric) && (value.zero? || (value.is_a?(Float) && value.nan?))
+
+      true
+    end
+  end
+  private_constant :AuthenticationResult
+
   class PublicError < StandardError
   end
 
@@ -292,8 +304,8 @@ module TypeFerry
 
     def authenticate(node, context)
       result = @auth&.call(node, context)
-      node.authenticated = !!result
-      node.set_context(result || nil)
+      node.authenticated = AuthenticationResult.accepted?(result)
+      node.set_context(node.authenticated ? result : nil)
       result
     end
 

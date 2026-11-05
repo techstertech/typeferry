@@ -18,6 +18,21 @@ class RuntimeTest < Minitest::Test
     def close = true
   end
 
+  def test_authentication_uses_javascript_truthiness_and_clears_rejected_context
+    [nil, false, 0, -0.0, Float::NAN, "", {}, []].each do |outcome|
+      server = TypeFerry::Server.new
+      server.set_auth(auth: ->(*) { outcome }, log_in: ->(*) { true })
+      node = TypeFerry::ClientNode.new(context: {"user" => {"_id" => "stale"}})
+
+      server.authenticate(node, {})
+
+      expected = outcome.is_a?(Hash) || outcome.is_a?(Array)
+      assert_equal expected, node.authenticated, outcome.inspect
+      assert_nil node.context unless expected
+      assert_nil node.user_id unless expected
+    end
+  end
+
   def test_schema_runs_before_middleware_and_handler
     server = TypeFerry::Server.new
     failure = TypeFerry::ValidationResult.new(false, nil, [TypeFerry::ValidationIssue.new(["name"], "is required")])

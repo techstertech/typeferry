@@ -91,6 +91,74 @@ class RackHTTPTest < Minitest::Test
     assert_equal 429, post(app, "ping").status
   end
 
+  def test_empty_allowlist_requires_independent_explicit_originless_access
+    server = TypeFerry::Server.new
+    server.add_method("ping", ->(*) { true })
+    blocked = TypeFerry::Transports::RackHTTP.new(server, origins: [], rate_limit: nil)
+    originless = TypeFerry::Transports::RackHTTP.new(server, origins: [], allow_originless: true, rate_limit: nil)
+
+    assert_equal 403, post(blocked, "ping").status
+    assert_equal 403, post(blocked, "ping", "HTTP_ORIGIN" => "https://other.test").status
+    assert_equal 200, post(originless, "ping").status
+    assert_equal 403, post(originless, "ping", "HTTP_ORIGIN" => "https://other.test").status
+    assert_equal 403, post(originless, "ping", "HTTP_ORIGIN" => "").status
+
+    empty_named = TypeFerry::Transports::RackHTTP.new(server, origins: [""], allow_originless: true, rate_limit: nil)
+    assert_equal 403, post(empty_named, "ping", "HTTP_ORIGIN" => "").status
+  end
+
+  def test_rate_headers_cover_admitted_responses_and_preserve_cookies
+    server = TypeFerry::Server.new
+    server.add_method("ping", lambda { |node, *|
+      node.response_headers << ["set-cookie", "first=1"]
+      true
+    })
+    limit = TypeFerry::Transports::RateLimit.new(2, 1001)
+    app = TypeFerry::Transports::RackHTTP.new(server, rate_limit: limit)
+    app.instance_variable_set(:@limiter, TypeFerry::Transports::SlidingWindowLimiter.new(limit, clock: -> { 0 }))
+
+    ["ping", "missing"].each_with_index do |method, index|
+      response = post(app, method)
+      assert_equal "2", response.headers["ratelimit-limit"]
+      assert_equal (1 - index).to_s, response.headers["ratelimit-remaining"]
+      assert_equal "2", response.headers["ratelimit-reset"]
+      assert_equal "first=1", response.headers["set-cookie"] if method == "ping"
+    end
+    blocked = post(app, "ping")
+    assert_equal 429, blocked.status
+    assert_equal "0", blocked.headers["ratelimit-remaining"]
+    assert_equal "2", blocked.headers["ratelimit-reset"]
+  end
+
+  def test_void_error_response_retains_rate_headers
+    app = TypeFerry::Transports::RackHTTP.new(TypeFerry::Server.new)
+    body = TypeFerry::EJSON.stringify({"payload" => {"method" => "missing", "void" => true}})
+
+    response = Rack::MockRequest.new(app).post(TypeFerry::Protocol::HTTP_PATH, input: body)
+
+    assert_empty response.body
+    assert_equal "119", response.headers["ratelimit-remaining"]
+  end
+
+  def test_disabled_limiter_emits_no_headers
+    app = TypeFerry::Transports::RackHTTP.new(TypeFerry::Server.new, rate_limit: nil)
+    response = post(app, "missing")
+
+    refute response.headers.keys.any? { |name| name.start_with?("ratelimit") }
+  end
+
+  def test_limiter_reset_tracks_the_oldest_admitted_request
+    now = 0
+    limiter = TypeFerry::Transports::SlidingWindowLimiter.new(
+      TypeFerry::Transports::RateLimit.new(2, 1001), clock: -> { now }
+    )
+
+    assert_equal [true, 1, 1001], limiter.consume("peer")
+    now = 501
+    assert_equal [true, 0, 500], limiter.consume("peer")
+    assert_equal [false, 0, 500], limiter.consume("peer")
+  end
+
   private
 
   def post(app, method, headers = {})

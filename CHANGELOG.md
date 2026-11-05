@@ -5,6 +5,7 @@
 - fix(go): enforce protocol admission and serialization contracts
 - fix(go): reject explicitly empty origin headers
 - fix(python): enforce protocol boundaries and complete EJSON parity
+- fix(ruby): align authentication, metadata, and quota semantics
 
 ## 2026-10-28
 

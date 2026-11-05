@@ -1,10 +1,15 @@
 module TypeFerry
   VERSION: String
 
+  module AuthenticationResult
+    def self.accepted?: (untyped value) -> bool
+  end
+
   module EJSON
     self.@custom_factories: Hash[String, Proc]
 
     VALID_REGEXP_FLAGS: String
+    MAX_ARRAY_INDEX: Integer
     TAG_KEYS: Array[Array[String]]
 
     class DateValue < Struct[Integer]
@@ -55,7 +60,8 @@ module TypeFerry
     def self.inf_nan: (Float value) -> (Float | Hash[String, Integer])
     def self.decode_inf_nan: (untyped sign) -> Float
     def self.decode_base64: (untyped value) -> String
-    def self.canonicalize: (untyped value) -> untyped
+    def self.order_properties: (untyped value, ?canonical: bool) -> untyped
+    def self.array_index_key?: (String key) -> bool
   end
 
   module Protocol

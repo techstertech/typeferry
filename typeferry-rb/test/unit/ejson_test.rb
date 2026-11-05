@@ -34,4 +34,16 @@ class EJSONTest < Minitest::Test
 
     assert_equal '{"a":3,"z":{"a":2,"b":1}}', TypeFerry::EJSON.stringify(value, canonical: true)
   end
+
+  def test_javascript_index_keys_precede_other_keys_recursively
+    value = {"z" => {"10" => 10, "2" => 2, "01" => 1}, "10" => 10, "2" => 2, "a" => 0}
+
+    assert_equal '{"2":2,"10":10,"z":{"2":2,"10":10,"01":1},"a":0}', TypeFerry::EJSON.stringify(value)
+  end
+
+  def test_canonical_keys_use_index_order_then_utf16_order
+    value = {"\ue000" => 1, "\u{10000}" => 2, "10" => {"2" => 3, "1" => 4}, "2" => 5}
+
+    assert_equal '{"2":5,"10":{"1":4,"2":3},"𐀀":2,"":1}', TypeFerry::EJSON.stringify(value, canonical: true)
+  end
 end

@@ -80,4 +80,40 @@ class WebSocketTest < Minitest::Test
 
     assert_equal [{"t" => "auth", "authenticated" => false}], socket.sent
   end
+
+  def test_handshake_authentication_uses_javascript_truthiness
+    [nil, false, 0, -0.0, Float::NAN, "", {}, []].each do |outcome|
+      socket = Socket.new("peer", [], [], 0)
+      dispatcher = TypeFerry::Transports::WebSocketDispatcher.new(
+        TypeFerry::Server.new, socket, handshake_authenticator: ->(*) { outcome }
+      )
+
+      dispatcher.open
+
+      expected = outcome.is_a?(Hash) || outcome.is_a?(Array)
+      assert_equal [{"t" => "auth", "authenticated" => expected}], socket.sent, outcome.inspect
+    ensure
+      dispatcher&.close
+    end
+  end
+
+  def test_invalid_uuid_is_replaced_instead_of_sanitized
+    socket = Socket.new("peer", [], [], 0)
+    dispatcher = TypeFerry::Transports::WebSocketDispatcher.new(
+      TypeFerry::Server.new, socket, query: {"uuid" => "a$b"}
+    )
+
+    refute_equal "ab", dispatcher.node.uuid
+    assert_match(/\A[a-zA-Z0-9-]{1,64}\z/, dispatcher.node.uuid)
+  end
+
+  def test_metadata_checks_raw_input_byte_size
+    socket = Socket.new("peer", [], [], 0)
+    raw = JSON.generate({"$date" => 123}) + " " * 10_000
+    dispatcher = TypeFerry::Transports::WebSocketDispatcher.new(
+      TypeFerry::Server.new, socket, query: {"meta" => raw}
+    )
+
+    assert_empty dispatcher.node.meta
+  end
 end

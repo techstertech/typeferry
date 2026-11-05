@@ -9,7 +9,7 @@ module TypeFerry
     class RateLimit
       attr_reader :max, :window_ms
 
-      def initialize(max = 100, window_ms = 60_000)
+      def initialize(max = 120, window_ms = 60_000)
         @max = max
         @window_ms = window_ms
       end
@@ -31,7 +31,7 @@ module TypeFerry
           return [false, 0, entries.first + @limit.window_ms - now] if entries.length >= @limit.max
 
           entries << now
-          [true, @limit.max - entries.length, @limit.window_ms]
+          [true, @limit.max - entries.length, entries.first + @limit.window_ms - now]
         end
       end
     end
@@ -57,7 +57,9 @@ module TypeFerry
         allowed, remaining, reset = @limiter ? @limiter.consume(client_address) : [true, 0, 0]
         return response(429, "", rate_headers(remaining, reset)) unless allowed
 
-        dispatch(request, client_address)
+        status, headers, body = dispatch(request, client_address)
+        rate_headers(remaining, reset).each { |name, value| headers[name] = value }
+        [status, headers, body]
       end
 
       private
@@ -153,8 +155,8 @@ module TypeFerry
 
         [
           ["ratelimit-limit", @rate_limit.max.to_s],
-          ["ratelimit-remaining", remaining.to_s],
-          ["ratelimit-reset", (reset_ms / 1000).to_s]
+          ["ratelimit-remaining", [0, remaining].max.to_s],
+          ["ratelimit-reset", (([0, reset_ms].max + 999) / 1000).to_s]
         ]
       end
     end
