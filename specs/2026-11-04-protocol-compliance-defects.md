@@ -1,11 +1,20 @@
 ---
-status: accepted
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-11-04
 updated: 2026-11-04
 implementation:
-  commits: []
+  commits:
+    - de4fd3a
+    - ae7a320
+    - 57d1c7c
+    - 16322ee
+    - 9c0c1a3
+    - 00eefcf
+    - 704d9af
+    - 32e82b1
+    - 8179582
 ---
 
 # Protocol compliance defect corrections
@@ -81,6 +90,9 @@ Anonymous cache keys continue to use ordinary EJSON bytes.
 Rust represents the full valid JavaScript date interval, inclusive of
 `-8640000000000000` and `8640000000000000` milliseconds. Approved date API changes
 must be documented, with explicit conversion behavior for chrono consumers.
+Python retains `datetime` for representable values and uses an internal
+epoch-millisecond value for wider dates. Public Python function signatures and
+constructors remain unchanged; documentation must describe the opaque fallback.
 Untrusted date and base64 inputs cannot panic or trigger allocation underflow.
 Invalid date behavior must follow the TypeScript encoder/decoder oracle rather
 than silently inventing epoch dates. Base64 keeps MIME and URL-safe decoding
@@ -118,7 +130,7 @@ style in implementation source.
 | A2 | Falsey authentication fails and timed-out auth cannot succeed later. | HTTP/WS scalar and container identity tests; pending callback timeout and no-fallback tests. |
 | A3 | UUIDs and metadata meet their input contracts. | Real handshake tests, UTF-8 bounds, literal EJSON-tag-shaped metadata. |
 | A4 | Ordinary and canonical EJSON bytes match TypeScript. | Shared ordered-entry fixtures and focused nested/cache tests across all five languages. |
-| A5 | Rust date range and base64 decoding are safe and compatible. | Boundary dates against TypeScript, generated binary round trips, malformed input regressions. |
+| A5 | Date range and Rust base64 decoding are safe and compatible. | Shared boundary dates against TypeScript, Python datetime edge precision, generated binary round trips, malformed input regressions. |
 | A6 | Admitted limited responses expose correct quota headers. | Success/error/void/429, disabled limiters, reset rounding, cookie preservation. |
 | A7 | Redis fixtures run and close preserves other server state. | Python/Rust fixture consumers; disposable Redis cleanup test. |
 | A8 | Negative assertions and release checks detect real regressions. | Deliberately unexpected-frame test and repository release-tool tests. |
@@ -134,15 +146,78 @@ do not roll back dependency security fixes without a safe replacement.
 
 ## Execution checklist
 
-- [ ] Extend shared fixtures and clarify the protocol.
-- [ ] Correct TypeScript boundaries and stale release checks.
-- [ ] Correct Python and Ruby boundaries and fixture coverage.
-- [ ] Correct Go authentication, metadata, origins, headers, and encoding.
-- [ ] Correct Rust runtime, transports, codec, and fixture coverage.
-- [ ] Run cross-language verification and fresh dependency audits.
-- [ ] Complete the post-work review and commit task-owned changes.
+- [x] Extend shared fixtures and clarify the protocol.
+- [x] Correct TypeScript boundaries and stale release checks.
+- [x] Correct Python and Ruby boundaries and fixture coverage.
+- [x] Correct Go authentication, metadata, origins, headers, and encoding.
+- [x] Correct Rust runtime, transports, codec, and fixture coverage.
+- [x] Run cross-language verification and fresh dependency audits.
+- [x] Complete the post-work review and commit task-owned changes.
 
 ## Verification results
 
-No implementation checks have run for this correction yet. The previous audit's
-passing suites do not establish acceptance of these new regressions.
+All acceptance criteria passed for the delivered correction set. This record
+does not claim that finite fixture coverage proves every possible protocol input.
+
+| ID | Result and executed evidence |
+|---|---|
+| A1 | Passed: native HTTP/WS regressions cover omitted/empty allowlists, missing/empty/matching/mismatching headers, independent opt-ins, and rejection before callbacks or quota. |
+| A2 | Passed: falsey scalar/container checks, pending and cancellation-resistant callbacks, no late authentication, and protected-call rejection. A real TypeScript regression additionally proved and corrected authorization retained after context installation or an authentication listener threw. |
+| A3 | Passed: invalid UUID replacement, literal tag-shaped metadata, raw UTF-8 bounds, and compact number spellings whose normalized output exceeds the raw budget. |
+| A4 | Passed: shared ordinary/canonical fixtures replay across all five languages, including numeric index boundaries, UTF-16 ordering, nested values, and cache-key checks. |
+| A5 | Passed: shared full-range date fixture, real JS client/Rust date echo, checked chrono conversion, Python datetime precision/equality, generated short binary round trips, malformed base64, and invalid date coercion. |
+| A6 | Passed for configurable limiters: normal/error/void/429 responses, reset ceiling/window behavior, cookie preservation, disabled limits, and oversized TypeScript RPC quota consumption. Rust retains its existing host-owned limiter model. |
+| A7 | Passed: Python/Rust shared Redis replay and live Rust own-key cleanup with repeated close and unrelated state preservation. Go and Ruby live Redis checks also passed. |
+| A8 | Passed: Python/Go/Rust harness regressions deliberately inject unexpected frames. All 21 repository script tests pass, including the real package validator with generated valid and invalid reports. |
+| A9 | Passed: complete relevant backend checks, 99 JS integration cases with Ruby explicitly enabled, browser checks, packed-consumer checks, and current dependency audits. |
+
+Executed package checks:
+
+- TypeScript: `npm run lint`, `npm run typecheck`,
+  `npm run test:unit -- --no-file-parallelism` (1792 tests),
+  `npm run test:integration` (99), `npm run test:browser` (24),
+  `npm run build`, `npm pack --dry-run`, `node ../scripts/verify-npm-package.mjs`
+  (577 allowed files), and `npm run verify:consumer` (build, test, runtime imports).
+- Python: `python -m pytest` (312), `ruff check .`, and `python -m mypy`
+  (53 source files).
+- Ruby: `bundle exec rake verify` with an owned Redis instance (118 tests,
+  440 assertions, no skips), Steep, Standard, gem build, and package inspection.
+- Rust: `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+  and `cargo test --workspace --all-features --locked` (122 passed, two explicit
+  ignores). The ignored Redis lifecycle test passed separately against an owned
+  Redis instance; the pre-existing macro documentation example remains ignored.
+- Go: `go test -count=1 ./...`, `go test -race -count=1 ./...`, `go vet ./...`,
+  and live Redis integration under the race detector.
+- Root: `python -m pytest scripts -q` (21) and `git diff --check`.
+- Post-work automation: `just verify-shared-fixtures` ran every native consumer;
+  TypeScript replayed 38 EJSON checks plus 23 HTTP/WS cases, Python passed 64,
+  Rust replayed all families and handshake checks, Ruby passed 45, and all four
+  Go fixture packages passed. The updated mastery guidance passed its validator.
+
+Fresh `npm audit` checks for both independent npm graphs, `pip-audit`, updated
+`bundler-audit`, `cargo audit`, and source/module `govulncheck` scans reported no
+advisories. RustSec also reported no warnings. The task introduced no production
+dependencies; Rust's existing Redis crate was added only to conformance tests.
+
+## Compatibility, environment, and residual limits
+
+- Strict configured origin admission and empty-list behavior are deliberate
+  security corrections. Originless callers must use the explicit transport opt-in.
+- Rust date construction changes from `EjsonValue::Date(date_time)` to
+  `EjsonValue::Date(date_time.into())`; `to_chrono()` is checked. Python wide dates
+  are opaque round-trip values; ordinary dates remain `datetime` objects.
+- An inherited/corrupt global Go cache required an isolated cache and the existing
+  command-scoped Mise Go environment override. No global tool settings changed.
+  Ruby interoperability used explicit pinned executable paths for nested commands.
+- Python retains existing Starlette TestClient deprecation and short test-HMAC
+  warnings. The packed consumer reports existing install-script policy and
+  deprecation warnings; its build, test, and runtime checks still pass.
+- Rust's limiter remains application-owned. The fixture command does not replace
+  complete suites, live lifecycle checks, or uncovered requirement review.
+- No package publication, deployment, release tag, or persisted-data migration ran.
+  Publication requires a separately selected version and the normal guarded gate.
+
+The post-work review added the shared fixture recipe, corrected conflicting
+fixture-sufficiency guidance, and recorded the negative-harness lesson globally.
+Broader CI restructuring was deferred because it is outside this correction set.
