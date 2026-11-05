@@ -7,6 +7,7 @@
 - fix(python): enforce protocol boundaries and complete EJSON parity
 - fix(ruby): align authentication, metadata, and quota semantics
 - fix(rust): enforce protocol boundaries and full EJSON date support
+- test(release): remove stale version and source assumptions
 
 ## 2026-10-28
 

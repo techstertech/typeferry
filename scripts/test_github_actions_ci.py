@@ -35,25 +35,25 @@ def test_workflow_preserves_ci_contract() -> None:
 
     triggers = workflow["on"]
     assert isinstance(triggers, dict)
-    assert triggers["push"] == {
-        "branches": ["main"],
-        "paths": [
-            "typeferry-ts/**",
-            "docs/conformance/**",
-            "PROTOCOL.md",
-            ".github/workflows/ci.yml",
-            "scripts/verify-npm-package.mjs",
-        ],
+    push = triggers["push"]
+    assert isinstance(push, dict)
+    assert push["branches"] == ["main"]
+
+    required_paths = {
+        "typeferry-ts/**",
+        "typeferry-rb/**",
+        "typeferry-go/**",
+        "docs/conformance/**",
+        "PROTOCOL.md",
+        ".github/workflows/ci.yml",
+        "scripts/verify-npm-package.mjs",
     }
-    assert triggers["pull_request"] == {
-        "paths": [
-            "typeferry-ts/**",
-            "docs/conformance/**",
-            "PROTOCOL.md",
-            ".github/workflows/ci.yml",
-            "scripts/verify-npm-package.mjs",
-        ],
-    }
+    for event in ("push", "pull_request"):
+        trigger = triggers[event]
+        assert isinstance(trigger, dict)
+        paths = trigger["paths"]
+        assert isinstance(paths, list)
+        assert required_paths <= set(paths)
 
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)

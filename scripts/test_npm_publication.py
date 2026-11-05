@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 REDIS_HELPER = ROOT / "scripts" / "run-with-redis.sh"
@@ -35,8 +38,7 @@ def test_root_justfile_has_safe_npm_release_recipes() -> None:
     assert "git diff --quiet" in justfile
     assert "refs/heads/main" in justfile
     assert (
-        "scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh "
-        "mise exec -- npm test"
+        "scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh mise exec -- npm test"
     ) in justfile
 
     package_validator = (ROOT / "scripts" / "verify-npm-package.mjs").read_text(
@@ -153,8 +155,10 @@ esac
     assert result.returncode == 23
     docker_calls = docker_log.read_text(encoding="utf-8").splitlines()
     assert docker_calls == [
-        "run --detach --rm --label typeferry.purpose=release-verification "
-        "--publish 127.0.0.1::6379 redis:7-alpine",
+        (
+            "run --detach --rm --label typeferry.purpose=release-verification "
+            "--publish 127.0.0.1::6379 redis:7-alpine"
+        ),
         "port temporary-redis-id 6379/tcp",
         "exec temporary-redis-id redis-cli ping",
         "stop temporary-redis-id",
@@ -202,33 +206,119 @@ esac
     )
 
 
-def test_package_validator_is_fail_closed_and_checks_exports() -> None:
-    validator = (ROOT / "scripts/verify-npm-package.mjs").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        (None, None),
+        ("missing-export", "export target is missing"),
+        ("unexpected-file", "unexpected package file"),
+        ("wrong-version", "package report version must match the manifest"),
+    ],
+)
+def test_package_validator_checks_the_actual_pack_report(
+    tmp_path: Path, mutation: str | None, expected_error: str | None
+) -> None:
+    """Exercise the shipped validator without publishing or contacting npm."""
+    script = tmp_path / "scripts/verify-npm-package.mjs"
+    package = tmp_path / "typeferry-ts"
+    binaries = tmp_path / "bin"
 
-    assert "'pack', '--dry-run', '--json'" in validator
-    assert "'publish', '--dry-run'" not in validator
-    assert "README.md" in validator
-    assert "package.json" in validator
-    assert "publishConfig" in validator
-    assert "exports" in validator
-    assert "dist/lit" in validator
-    assert "EXPECTED_VERSION" not in validator
-    assert "report.version === manifestVersion" in validator
-    assert "process.exitCode = 1" in validator
+    script.parent.mkdir()
+    binaries.mkdir()
+    shutil.copyfile(ROOT / "scripts/verify-npm-package.mjs", script)
 
+    manifest: dict[str, object] = json.loads(
+        (ROOT / "typeferry-ts/package.json").read_text(encoding="utf-8")
+    )
+    manifest["exports"] = {"./client": "./dist/client/index.js"}
+    package.mkdir()
+    (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-def test_release_docs_define_the_published_release() -> None:
-    release_docs = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+    files = [
+        "README.md",
+        "package.json",
+        "dist/minimongo/NOTICE.md",
+        "dist/minimongo/README.md",
+    ]
+    for module in ("client/index", "cli/index"):
+        source = package / f"src/{module}.ts"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("export {}\n", encoding="utf-8")
+        files.extend(f"dist/{module}.{suffix}" for suffix in ("js", "d.ts", "js.map"))
 
-    assert "Published npm release" in release_docs
-    assert "typeferry@0.8.0" in release_docs
-    assert "`0.9.0` as an unpublished candidate" in release_docs
-    assert "create the annotated Git tag\n`v0.9.0`" in release_docs
-    assert "No GitHub release is created" in release_docs
-    assert "does not bump versions, create Git tags, push commits" in release_docs
+    report_files = [{"path": name} for name in files]
+    report_version = manifest["version"]
+
+    if mutation == "missing-export":
+        manifest["exports"] = {"./client": "./dist/missing.js"}
+        (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "unexpected-file":
+        report_files.append({"path": "dist/secret.json"})
+    elif mutation == "wrong-version":
+        report_version = f"{manifest['version']}-mismatch"
+
+    report = {
+        "name": manifest["name"],
+        "version": report_version,
+        "size": 100,
+        "files": report_files,
+    }
+
+    report_path = tmp_path / "report.json"
+    call_path = tmp_path / "npm-call.json"
+    report_path.write_text(json.dumps([report]), encoding="utf-8")
+    fake_npm = binaries / "npm"
+    fake_npm.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['TYPEFERRY_TEST_NPM_CALL']).write_text(json.dumps(sys.argv[1:]))\n"
+        "print(Path(os.environ['TYPEFERRY_TEST_NPM_REPORT']).read_text())\n",
+        encoding="utf-8",
+    )
+    fake_npm.chmod(0o755)
+
+    selected_node = subprocess.run(
+        ["mise", "exec", "--", "node", "-p", "process.execPath"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    result = subprocess.run(
+        [selected_node, script],
+        env={
+            **os.environ,
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "TYPEFERRY_TEST_NPM_CALL": str(call_path),
+            "TYPEFERRY_TEST_NPM_REPORT": str(report_path),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert json.loads(call_path.read_text(encoding="utf-8")) == [
+        "pack",
+        "--dry-run",
+        "--json",
+    ]
+    if expected_error is None:
+        assert result.returncode == 0, result.stderr
+        assert f"Verified typeferry@{manifest['version']}" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert expected_error in result.stderr
 
 
 def test_package_and_template_locks_use_final_identity() -> None:
+    manifest = json.loads(
+        (ROOT / "typeferry-ts/package.json").read_text(encoding="utf-8")
+    )
+    template_manifest = json.loads(
+        (ROOT / "template/package.json").read_text(encoding="utf-8")
+    )
     package_lock = json.loads(
         (ROOT / "typeferry-ts/package-lock.json").read_text(encoding="utf-8")
     )
@@ -237,12 +327,14 @@ def test_package_and_template_locks_use_final_identity() -> None:
     )
 
     assert package_lock["name"] == "typeferry"
-    assert package_lock["version"] == "0.9.0"
+    assert package_lock["version"] == manifest["version"]
     assert package_lock["packages"][""]["name"] == "typeferry"
-    assert package_lock["packages"][""]["engines"]["node"] == ">=24.19.0 <27"
-    assert template_lock["packages"][""]["dependencies"]["typeferry"] == "^0.8.0"
+    assert package_lock["packages"][""]["engines"] == manifest["engines"]
+    assert (
+        template_lock["packages"][""]["dependencies"]["typeferry"]
+        == template_manifest["dependencies"]["typeferry"]
+    )
     assert "node_modules/typeferry" in template_lock["packages"]
-    assert template_lock["packages"]["node_modules/typeferry"]["version"] == "0.8.0"
     assert template_lock["packages"]["node_modules/typeferry"]["resolved"].startswith(
         "https://registry.npmjs.org/typeferry/-/typeferry-"
     )
@@ -250,7 +342,11 @@ def test_package_and_template_locks_use_final_identity() -> None:
 
 
 def test_active_code_has_no_temporary_package_imports() -> None:
-    roots = [ROOT / "typeferry-ts/src", ROOT / "template/client", ROOT / "template/server"]
+    roots = [
+        ROOT / "typeferry-ts/src",
+        ROOT / "template/client",
+        ROOT / "template/server",
+    ]
     stale_files: list[str] = []
 
     for source_root in roots:
