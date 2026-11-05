@@ -1,0 +1,21 @@
+{
+  "name": "short padded and unpadded binary values",
+  "value": {
+    "__kind": "array",
+    "items": [
+      {
+        "__kind": "binary",
+        "base64": "AA=="
+      },
+      {
+        "__kind": "binary",
+        "base64": "AAE="
+      },
+      {
+        "__kind": "binary",
+        "base64": "AAEC"
+      }
+    ]
+  },
+  "encoded": "[{\"$binary\":\"AA==\"},{\"$binary\":\"AAE=\"},{\"$binary\":\"AAEC\"}]"
+}

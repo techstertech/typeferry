@@ -1,9 +1,42 @@
 import { Hono } from 'hono'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { rateLimiter } from './hono-rate-limit'
 
 describe('rateLimiter', () => {
+  it('rounds reset seconds up and starts a new window at expiry', async () => {
+    let now = 0
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const limiter = rateLimiter({ windowMs: 1501, max: 2 })
+    const app = new Hono()
+
+    app.use('*', limiter)
+    app.get('/', context => context.text('ok'))
+
+    try {
+      const first = await app.request('/')
+
+      expect(first.headers.get('ratelimit-remaining')).toBe('1')
+      expect(first.headers.get('ratelimit-reset')).toBe('2')
+
+      now = 1000
+      const second = await app.request('/')
+
+      expect(second.headers.get('ratelimit-remaining')).toBe('0')
+      expect(second.headers.get('ratelimit-reset')).toBe('1')
+
+      now = 1501
+      const renewed = await app.request('/')
+
+      expect(renewed.status).toBe(200)
+      expect(renewed.headers.get('ratelimit-remaining')).toBe('1')
+      expect(renewed.headers.get('ratelimit-reset')).toBe('2')
+    } finally {
+      limiter.close()
+      clock.mockRestore()
+    }
+  })
+
   it('allows requests under the limit', async () => {
     const app = new Hono()
     app.use('*', rateLimiter({ windowMs: 60_000, max: 5 }))

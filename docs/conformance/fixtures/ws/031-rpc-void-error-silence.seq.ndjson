@@ -1,0 +1,12 @@
+{"op":"setup","methods":[{"name":"private","handler":"return_const:secret","protected":true},{"name":"boom","handler":"raise_public:must stay silent"},{"name":"marker","handler":"return_const:ok"}]}
+{"op":"connect","query":{}}
+{"op":"expect_server_frame","frame":{"t":"auth","authenticated":false}}
+{"op":"send","frame":{"t":"rpc:void","method":"absent"}}
+{"op":"expect_no_server_frame","within_ms":100}
+{"op":"send","frame":{"t":"rpc:void","method":"private"}}
+{"op":"expect_no_server_frame","within_ms":100}
+{"op":"send","frame":{"t":"rpc:void","method":"boom"}}
+{"op":"expect_no_server_frame","within_ms":100}
+{"op":"send","frame":{"t":"rpc","id":"after-void","method":"marker"}}
+{"op":"expect_server_frame","frame":{"t":"rpc:res","id":"after-void","result":"ok"}}
+{"op":"disconnect"}

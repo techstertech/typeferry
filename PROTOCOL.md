@@ -10,9 +10,9 @@ MUST additionally match the authoring surface documented in
 `docs/plans/2026-04-20-python-server-port-and-monorepo.md` and
 `docs/plans/2026-04-12-rust-server-feature-parity.md`.
 
-This document cites the canonical TS implementation at `file:line` for
-every contract point. When this document and the TS source disagree, the
-TS source wins and this document is a bug.
+This document defines the wire contract. Source references explain the
+implementation but do not override normative requirements. When an
+implementation disagrees, correct the implementation and its regression tests.
 
 ## Table of Contents
 
@@ -80,10 +80,16 @@ bodies; the JS client decodes on body content, not Content-Type. An
 alternate implementation MAY choose either header value but MUST serve
 EJSON-text.
 
-Servers that configure an origin allowlist MUST reject missing and non-matching
-browser origins by default. A host MAY explicitly allow an absent `Origin` for
-a trusted non-browser integration. Implementations SHOULD reject request bodies
-above a configurable finite byte limit before EJSON decoding.
+An omitted origin allowlist permits all origins. A configured allowlist uses
+exact matches; an explicitly empty list permits no named origins. Configured
+allowlists MUST reject missing and non-matching browser origins before RPC
+authentication, body decoding, method dispatch, or rate-limit consumption.
+A host MAY explicitly allow an absent `Origin` for a trusted non-browser
+integration. HTTP and WebSocket opt-ins are independent, default to false,
+and MUST NOT admit a mismatching named origin. This policy covers the protocol
+endpoints, not unrelated application health or static routes. Implementations
+SHOULD reject request bodies above a configurable finite byte limit before
+EJSON decoding.
 
 Sources: `src/server/transports/http-transport.ts:47-48,68`,
 `src/server/transports/bun-hono-transport.ts:87,90,262,279`.
@@ -179,8 +185,16 @@ Custom: `{ interval: <ms>, max: <count> }`.
 Sources: `src/server/transports/http-transport.ts:50-57`,
 `src/server/transports/bun-hono-transport.ts:82-88`.
 
-Rate-limit headers MUST use the `RateLimit-*` standard header set
-(`standardHeaders: true`, `legacyHeaders: false`).
+When enabled, the limiter MUST attach `RateLimit-Limit`, `RateLimit-Remaining`,
+and `RateLimit-Reset` to each response after rate admission, including RPC
+success/error responses, void responses, and HTTP 429. `Remaining` is the
+nonnegative remaining quota. `Reset` is the nonnegative relative number of
+seconds until the current limiter window resets, rounded up. Requests rejected
+before rate admission do not consume quota. Disabled limiters emit no quota
+headers. Header names are case-insensitive; legacy `X-RateLimit-*` headers are
+not required. Existing response cookies MUST be preserved.
+
+Source: `typeferry-ts/src/server/transports/hono-rate-limit.ts`.
 
 ### 2.2 WebSocket transport
 
@@ -195,11 +209,16 @@ Rate-limit headers MUST use the `RateLimit-*` standard header set
 
 | Param  | Type   | Required | Constraint                                    |
 |--------|--------|----------|-----------------------------------------------|
-| `uuid` | string | no       | 1–64 chars; MUST be sanitized to `[a-zA-Z0-9-]`; if missing/invalid the server MUST assign a fresh random UUID |
+| `uuid` | string | no       | 1–64 ASCII chars from `[a-zA-Z0-9-]`; valid values remain unchanged; missing/invalid values receive a fresh random UUID |
 | `token`| string | no       | auth bearer token; omission means unauthenticated |
 | `meta` | string | no       | JSON-encoded object; MUST NOT exceed 10 000 bytes; invalid or oversize values MUST be normalized to `{}` |
 
 Sources: `src/server/transports/ws-shared.ts:17-20,204-240`.
+
+Invalid UUIDs MUST NOT be repaired by deleting characters, because that can
+alias another client's identity. The metadata size limit applies to the raw
+JSON string's UTF-8 bytes before parsing, including whitespace. Metadata MUST
+use JSON rather than EJSON decoding; tag-shaped objects remain literal objects.
 
 #### 2.2.2 Connection lifecycle
 
@@ -307,7 +326,7 @@ round-trip every form listed below exactly as the TS implementation does
 
 | Native value       | JSON form                                    | Notes |
 |--------------------|----------------------------------------------|-------|
-| `Date`             | `{"$date": <ms since epoch, integer>}`       | `getTime()` value (`built-in-converters.ts:15-20`) |
+| `Date`             | `{"$date": <ms since epoch, integer>}`       | Full JS date interval, inclusive of ±8640000000000000 ms; invalid dates encode their NaN time as JSON null |
 | `RegExp`           | `{"$regexp": <source>, "$flags": <flags>}`   | On decode, flags are filtered to `[gimuy]`, deduplicated, capped at 50 chars (`built-in-converters.ts:32-49`) |
 | `NaN`              | `{"$InfNaN": 0}`                              | (`built-in-converters.ts:58-71`) |
 | `Infinity`         | `{"$InfNaN": 1}`                              | |
@@ -335,14 +354,22 @@ MUST be rejected.
 
 ### 3.3 Canonical stable-stringify
 
-EJSON's canonical mode recursively sorts object keys lexicographically
-(arrays preserved in order, primitives untouched).
+EJSON preserves JavaScript property enumeration. Array-index keys are decimal
+strings from `"0"` through `"4294967294"` without leading zeroes; they are emitted
+first in ascending numeric order. Ordinary mode then emits other string keys in
+insertion order. Strings such as `"01"`, `"-0"`, and `"4294967295"` are not index
+keys.
+
+Canonical mode preserves the index-key rule and sorts the remaining string keys
+lexicographically by UTF-16 code units. This applies recursively; array element
+order remains unchanged. The algorithm preserves existing TypeScript bytes,
+including JavaScript's numeric enumeration after sorting object keys.
 
 Source: `src/ejson/stable-stringify.ts:1-34`.
 
-This algorithm is normative for any feature that depends on
-byte-identical serialization — most importantly the `@Cached` cache-key
-algorithm (section 7.3).
+This algorithm is normative for canonical byte-identical serialization.
+Anonymous method cache keys use ordinary EJSON rather than canonical mode, as
+specified in section 6.3.
 
 ### 3.4 Undefined
 
@@ -719,8 +746,10 @@ reserved.
 - WebSocket: during `authenticateNode`, with
   `{ token: <query-param token> }`.
 
-If the function returns a truthy value, the node is marked
-authenticated and that value becomes `node.context`. Setting
+Truthiness follows JavaScript: null, false, positive/negative zero, NaN, and
+empty strings fail; arrays and objects succeed even when empty. An unsuccessful
+result MUST NOT retain authenticated context. If the function returns a truthy
+value, the node is marked authenticated and that value becomes `node.context`. Setting
 `node.userId` requires the context contain a `user._id` field
 (`src/server/client-node.ts:98-113`) — this is a TS-side application
 invariant that conformant servers SHOULD match when exposing

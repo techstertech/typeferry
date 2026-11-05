@@ -1,0 +1,17 @@
+{
+  "name": "full JavaScript date range boundaries",
+  "value": {
+    "__kind": "array",
+    "items": [
+      {
+        "__kind": "date",
+        "millis": -8640000000000000
+      },
+      {
+        "__kind": "date",
+        "millis": 8640000000000000
+      }
+    ]
+  },
+  "encoded": "[{\"$date\":-8640000000000000},{\"$date\":8640000000000000}]"
+}

@@ -139,6 +139,20 @@ describeIf('JS client ↔ Rust server (cross-language integration)', () => {
     }
   })
 
+  it('preserves dates across the full JavaScript date range', async () => {
+    const client = await newClient()
+    const limit = 8_640_000_000_000_000
+    const dates = [-limit, limit].map(millis => new Date(millis))
+
+    try {
+      const result: unknown = await client.call('echo', { dates })
+
+      expect(result).toEqual({ dates })
+    } finally {
+      await client.close()
+    }
+  })
+
   it('accepts a valid token and returns the authenticated user id', async () => {
     const client = await newClient({ token: 'good-token' })
     try {

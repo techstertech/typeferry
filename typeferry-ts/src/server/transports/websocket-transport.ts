@@ -17,6 +17,7 @@ import type { Server } from '../server'
 import type { TypeFerrySocket } from '../types'
 import { SocketState } from '../types'
 import type { NodeHonoTransport } from './node-hono-transport'
+import { createOriginChecker } from './origin-policy'
 
 import {
   PING_INTERVAL_MS,
@@ -47,6 +48,11 @@ const UPGRADE_FORBIDDEN_RESPONSE =
 export interface WebSocketTransportOptions {
   path?: string
   /**
+   * Admits an absent Origin under a configured allowlist.
+   * This does not change HTTP RPC admission or permit mismatching origins.
+   */
+  allowOriginless?: boolean
+  /**
    * Application-owned handshake auth; rejection never falls back to token auth.
    */
   handshakeAuthenticator?: WebSocketHandshakeAuthenticator
@@ -65,7 +71,7 @@ export class WebSocketTransport {
   rooms = new RoomRegistry()
 
   private path: string
-  private origins: Set<string> | null
+  private originAllowed: (origin: string | undefined) => boolean
   private handshakeAuthenticator: WebSocketHandshakeAuthenticator | undefined
   private pingTimers = new Map<TypeFerrySocket, ReturnType<typeof setInterval>>()
   private pongReceived = new Map<TypeFerrySocket, boolean>()
@@ -77,7 +83,7 @@ export class WebSocketTransport {
   ) {
     this.server = server
     this.path = opts?.path ?? TYPEFERRY_WS_PATH
-    this.origins = origins?.length ? new Set(origins) : null
+    this.originAllowed = createOriginChecker(origins, opts?.allowOriginless)
     this.handshakeAuthenticator = opts?.handshakeAuthenticator
 
     this.wss = new WebSocketServer({ noServer: true })
@@ -126,10 +132,7 @@ export class WebSocketTransport {
   }
 
   private validateOrigin(req: http.IncomingMessage): boolean {
-    if (!this.origins) return true
-    const origin = req.headers.origin
-    if (!origin) return true
-    return this.origins.has(origin)
+    return this.originAllowed(req.headers.origin)
   }
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {

@@ -1,0 +1,14 @@
+{
+  "name": "void:true suppresses missing-method errors",
+  "setup": {},
+  "request": {
+    "headers": {
+      "content-type": "text/plain"
+    },
+    "body": "{\"context\":{},\"payload\":{\"method\":\"absent\",\"void\":true}}"
+  },
+  "response": {
+    "status": 200,
+    "body": ""
+  }
+}

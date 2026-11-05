@@ -1,0 +1,22 @@
+{
+  "name": "void:true suppresses forbidden-method errors",
+  "setup": {
+    "methods": [
+      {
+        "name": "private",
+        "handler": "return_const:secret",
+        "protected": true
+      }
+    ]
+  },
+  "request": {
+    "headers": {
+      "content-type": "text/plain"
+    },
+    "body": "{\"context\":{},\"payload\":{\"method\":\"private\",\"void\":true}}"
+  },
+  "response": {
+    "status": 200,
+    "body": ""
+  }
+}

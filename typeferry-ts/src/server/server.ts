@@ -28,6 +28,7 @@ import {
   RedisTransport,
   WebSocketTransport,
 } from './transports'
+import type { WebSocketTransportOptions } from './transports/websocket-transport'
 
 declare global {
   var TypeFerry: Server | undefined
@@ -89,8 +90,13 @@ export type ServerOptions = {
   port?: number
   auth?: AuthFunction
   origins?: string[]
+  /**
+   * Admits HTTP RPC calls without Origin when an allowlist is configured.
+   * WebSocket admission has its own `ws.allowOriginless` option.
+   */
+  allowOriginless?: boolean
   debug?: boolean
-  ws?: Record<string, unknown>
+  ws?: WebSocketTransportOptions & Record<string, unknown>
   redis?: RedisClientOptions | boolean
   /**
    * Observes Node request metadata and synchronous `data` events without owning
@@ -177,6 +183,7 @@ export class Server<
     port = 80,
     debug = false,
     origins,
+    allowOriginless = false,
     ws,
     redis,
     requestListener,
@@ -212,6 +219,7 @@ export class Server<
       this.rateLimit,
       this.maxRequestBodySize,
       requestBodySizeLimits,
+      allowOriginless,
     )
     this.webSocketTransport = new WebSocketTransport(this, origins, ws)
     this.redisTransport = redis ? new RedisTransport(this, redis) : null

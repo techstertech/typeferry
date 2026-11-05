@@ -126,13 +126,13 @@ describe('WebSocketTransport', () => {
   describe('constructor', () => {
     it('registers an error handler on the wss', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       expect(mockWssOn).toHaveBeenCalledWith('error', expect.any(Function))
     })
 
     it('emits WEBSOCKET_SERVER_ERROR when wss errors', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
 
       const errorHandler = mockWssOn.mock.calls.find(
         call => call[0] === 'error',
@@ -145,7 +145,7 @@ describe('WebSocketTransport', () => {
 
     it('attaches an upgrade handler on the HTTP server', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       expect(server.httpTransport.http.on).toHaveBeenCalledWith(
         'upgrade',
         expect.any(Function),
@@ -169,7 +169,7 @@ describe('WebSocketTransport', () => {
       ).toBe(false)
     })
 
-    it('allows all origins when empty array is provided', () => {
+    it('rejects all named origins when an empty allowlist is provided', () => {
       const server = createMockServer()
       const transport = new WebSocketTransport(server, [])
 
@@ -177,14 +177,14 @@ describe('WebSocketTransport', () => {
         (transport as any).validateOrigin({
           headers: { origin: 'http://anything.com' },
         }),
-      ).toBe(true)
+      ).toBe(false)
     })
   })
 
   describe('upgrade handler', () => {
     it('rejects requests to non-matching paths and closes the socket', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const upgradeHandler = getUpgradeHandler(server)
 
       const socket = {
@@ -208,7 +208,7 @@ describe('WebSocketTransport', () => {
 
     it('destroys socket when acceptConnections is false', () => {
       const server = createMockServer({ acceptConnections: false })
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const upgradeHandler = getUpgradeHandler(server)
 
       const socket = {
@@ -249,15 +249,15 @@ describe('WebSocketTransport', () => {
       expect(socket.destroy).toHaveBeenCalled()
     })
 
-    it('allows connections without origin header even when origins are configured', () => {
+    it('rejects missing origins when an allowlist is configured', () => {
       const server = createMockServer()
       const transport = new WebSocketTransport(server, ['http://allowed.com'])
-      expect((transport as any).validateOrigin({ headers: {} })).toBe(true)
+      expect((transport as any).validateOrigin({ headers: {} })).toBe(false)
     })
 
     it('delegates to wss.handleUpgrade on valid request', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const upgradeHandler = getUpgradeHandler(server)
 
       const req = { url: '/typeferry-ws', headers: {} }
@@ -280,7 +280,7 @@ describe('WebSocketTransport', () => {
   describe('handleConnection', () => {
     it('creates a ClientNode and adds it to the server', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -294,7 +294,7 @@ describe('WebSocketTransport', () => {
 
     it('sets up message, close, and error handlers on the websocket', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -309,7 +309,7 @@ describe('WebSocketTransport', () => {
 
     it('calls authenticateNode with the node and token', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -328,7 +328,7 @@ describe('WebSocketTransport', () => {
 
     it('cleans up on close: stops ping, leaves rooms, deletes client', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -343,7 +343,7 @@ describe('WebSocketTransport', () => {
 
     it('emits SOCKET_ERROR on ws error', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -364,7 +364,7 @@ describe('WebSocketTransport', () => {
 
   describe('handleMessage', () => {
     function setupForMessage(server: any) {
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
       triggerConnection(server, ws)
 
@@ -457,7 +457,7 @@ describe('WebSocketTransport', () => {
   describe('ping / pong keep-alive', () => {
     it('sends pings at the configured interval', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -469,7 +469,7 @@ describe('WebSocketTransport', () => {
 
     it('terminates socket when pong is not received', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -484,7 +484,7 @@ describe('WebSocketTransport', () => {
 
     it('does not send ping when socket is not OPEN', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs(SocketState.CLOSING)
 
       triggerConnection(server, ws)
@@ -496,7 +496,7 @@ describe('WebSocketTransport', () => {
 
     it('sets pongReceived to true when pong event fires', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [])
+      new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -521,7 +521,7 @@ describe('WebSocketTransport', () => {
   describe('close', () => {
     it('clears all ping timers and closes open connections', async () => {
       const server = createMockServer()
-      const transport = new WebSocketTransport(server, [])
+      const transport = new WebSocketTransport(server, undefined)
       const ws = createMockWs()
 
       triggerConnection(server, ws)
@@ -534,7 +534,7 @@ describe('WebSocketTransport', () => {
 
     it('does not call ws.close() if socket is not OPEN', async () => {
       const server = createMockServer()
-      const transport = new WebSocketTransport(server, [])
+      const transport = new WebSocketTransport(server, undefined)
       const ws = createMockWs(SocketState.CLOSED)
 
       triggerConnection(server, ws)
@@ -546,7 +546,7 @@ describe('WebSocketTransport', () => {
 
     it('resolves the promise after wss.close completes', async () => {
       const server = createMockServer()
-      const transport = new WebSocketTransport(server, [])
+      const transport = new WebSocketTransport(server, undefined)
 
       const result = await transport.close()
       expect(result).toBeUndefined()
@@ -557,7 +557,7 @@ describe('WebSocketTransport', () => {
   describe('custom path', () => {
     it('uses the custom path from options', () => {
       const server = createMockServer()
-      new WebSocketTransport(server, [], { path: '/custom-ws' })
+      new WebSocketTransport(server, undefined, { path: '/custom-ws' })
       const upgradeHandler = getUpgradeHandler(server)
 
       const rejectedSocket = {

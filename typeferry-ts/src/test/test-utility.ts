@@ -42,6 +42,10 @@ export class TestUtility {
         debug,
         globalInstance,
         origins: ['http://localhost'],
+        // These tests use trusted Node clients without browser Origin headers.
+        // Transport boundary tests separately exercise fail-closed defaults.
+        allowOriginless: true,
+        ws: { allowOriginless: true },
         ...(redis === undefined ? {} : { redis }),
       })
 

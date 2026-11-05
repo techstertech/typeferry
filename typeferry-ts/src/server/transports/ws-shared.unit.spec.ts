@@ -110,9 +110,11 @@ describe('validateUuid', () => {
     expect(result).toBe('abc-123-def')
   })
 
-  it('strips non-alphanumeric, non-dash characters', () => {
+  it('assigns a fresh UUID instead of changing an invalid identity', () => {
     const result = validateUuid('abc!@#$%^&*()_+def')
-    expect(result).toBe('abcdef')
+    expect(result).not.toBe('abcdef')
+    expect(result).toMatch(/^[a-zA-Z0-9-]{1,64}$/)
+    expect(validateUuid('!!!')).toMatch(/^[a-zA-Z0-9-]{1,64}$/)
   })
 
   it('preserves dashes in the UUID', () => {
@@ -141,6 +143,9 @@ describe('validateUuid', () => {
 // ---------------------------------------------------------------------------
 
 describe('validateMeta', () => {
+  it('bounds UTF-8 bytes rather than JavaScript character count', () => {
+    expect(validateMeta({ value: '😀'.repeat(MAX_META_SIZE / 4) })).toEqual({})
+  })
   it('returns {} for null', () => {
     expect(validateMeta(null)).toEqual({})
   })
@@ -204,6 +209,23 @@ describe('validateMeta', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMeta', () => {
+  it('accepts raw JSON within the limit even when number spelling expands', () => {
+    const raw = `{"values":[${Array.from({ length: 1000 }, () => '1e20').join(',')}]}`
+
+    expect(Buffer.byteLength(raw, 'utf8')).toBeLessThan(MAX_META_SIZE)
+    expect(parseMeta(raw)).toHaveProperty('values.0', 1e20)
+  })
+
+  it('bounds the original UTF-8 input before parsing', () => {
+    const raw = `${' '.repeat(MAX_META_SIZE)}{"key":1}`
+
+    expect(parseMeta(raw)).toEqual({})
+    expect(parseMeta('{"$date":0,"nested":{"$binary":"AA=="}}')).toEqual({
+      $date: 0,
+      nested: { $binary: 'AA==' },
+    })
+  })
+
   it('returns {} for null input', () => {
     expect(parseMeta(null)).toEqual({})
   })

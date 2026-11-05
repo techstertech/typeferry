@@ -10,13 +10,15 @@ interface RateLimitOptions {
   max: number
 }
 
+const MILLISECONDS_PER_SECOND = 1000
+
 /** Hono middleware whose cleanup timer follows its owning transport lifecycle. */
 export type DisposableRateLimiter = MiddlewareHandler & {
   close(): void
 }
 
 /**
- * Simple sliding-window IP rate limiter for Hono.
+ * Fixed-window IP rate limiter for Hono.
  * Applies per-client HTTP RPC limits within Hono.
  */
 export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
@@ -42,6 +44,13 @@ export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
     }
 
     entry.count++
+
+    c.header('RateLimit-Limit', String(opts.max))
+    c.header('RateLimit-Remaining', String(Math.max(0, opts.max - entry.count)))
+    c.header(
+      'RateLimit-Reset',
+      String(Math.ceil(Math.max(0, entry.resetAt - now) / MILLISECONDS_PER_SECOND)),
+    )
 
     if (entry.count > opts.max) {
       return c.text('Too Many Requests', 429)

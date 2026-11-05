@@ -1,0 +1,107 @@
+{
+  "name": "canonical JavaScript index and UTF-16 key ordering",
+  "canonical": true,
+  "value": {
+    "__kind": "object",
+    "entries": [
+      [
+        "10",
+        {
+          "__kind": "int",
+          "value": 10
+        }
+      ],
+      [
+        "2",
+        {
+          "__kind": "int",
+          "value": 2
+        }
+      ],
+      [
+        "b",
+        {
+          "__kind": "int",
+          "value": 1
+        }
+      ],
+      [
+        "01",
+        {
+          "__kind": "int",
+          "value": 3
+        }
+      ],
+      [
+        "4294967294",
+        {
+          "__kind": "int",
+          "value": 4
+        }
+      ],
+      [
+        "4294967295",
+        {
+          "__kind": "int",
+          "value": 5
+        }
+      ],
+      [
+        "",
+        {
+          "__kind": "int",
+          "value": 6
+        }
+      ],
+      [
+        "😀",
+        {
+          "__kind": "int",
+          "value": 7
+        }
+      ],
+      [
+        "a",
+        {
+          "__kind": "array",
+          "items": [
+            {
+              "__kind": "object",
+              "entries": [
+                [
+                  "10",
+                  {
+                    "__kind": "int",
+                    "value": 10
+                  }
+                ],
+                [
+                  "2",
+                  {
+                    "__kind": "int",
+                    "value": 2
+                  }
+                ],
+                [
+                  "",
+                  {
+                    "__kind": "int",
+                    "value": 8
+                  }
+                ],
+                [
+                  "😀",
+                  {
+                    "__kind": "int",
+                    "value": 9
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  "encoded": "{\"2\":2,\"10\":10,\"4294967294\":4,\"01\":3,\"4294967295\":5,\"a\":[{\"2\":2,\"10\":10,\"😀\":9,\"\":8}],\"b\":1,\"😀\":7,\"\":6}"
+}

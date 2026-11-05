@@ -32,6 +32,7 @@ import type { TypeFerryRequest, TypeFerryResponse } from '../request-types'
 import type { RateLimit, RequestBodySizeLimit, Server } from '../server'
 import { rateLimiter, type DisposableRateLimiter } from './hono-rate-limit'
 import { streamingBodyLimit } from './hono-streaming-body-limit'
+import { createOriginChecker } from './origin-policy'
 import {
   HttpTransportEvents,
   SERVER_NOT_READY_RESPONSE,
@@ -55,6 +56,7 @@ export class NodeHonoTransport {
     limit: RateLimit,
     maxRequestBodySize: number,
     requestBodySizeLimits: readonly RequestBodySizeLimit[] = [],
+    allowOriginless = false,
   ) {
     this.server = server
     this.app = new Hono()
@@ -64,6 +66,7 @@ export class NodeHonoTransport {
       limit,
       maxRequestBodySize,
       requestBodySizeLimits,
+      allowOriginless,
     )
     const honoListener = getRequestListener((request, env) =>
       this.handleFetch(request, env as HttpBindings),
@@ -153,8 +156,42 @@ export class NodeHonoTransport {
     limit: RateLimit,
     maxRequestBodySize: number,
     requestBodySizeLimits: readonly RequestBodySizeLimit[],
+    allowOriginless: boolean,
   ): void {
     validateRequestBodyLimits(maxRequestBodySize, requestBodySizeLimits)
+
+    const originAllowed = createOriginChecker(origins, allowOriginless)
+
+    // Application routes such as static assets and health checks are outside
+    // RPC origin admission. Browser navigation does not supply an Origin.
+    this.app.use('/__h', async (context, next) => {
+      if (!originAllowed(context.req.header('origin'))) {
+        return context.text('Forbidden', 403)
+      }
+      await next()
+    })
+
+    if (origins !== undefined) {
+      this.app.use(
+        '*',
+        cors({
+          origin: (origin: string) =>
+            origins.includes(origin) ? origin : null,
+          credentials: true,
+        }),
+      )
+    }
+
+    // Oversized RPC attempts consume quota after origin admission.
+    if (limit) {
+      const opts =
+        limit === true
+          ? { windowMs: 60_000, max: 120 }
+          : { windowMs: limit.interval, max: limit.max }
+      this.httpRateLimiter = rateLimiter(opts)
+      this.app.use('/__h', this.httpRateLimiter)
+    }
+
     this.app.use('*', (c, next) => {
       const policy = getRequestBodyPolicy(
         c.req.path,
@@ -167,26 +204,6 @@ export class NodeHonoTransport {
         onError: (context) => context.text('Request Entity Too Large', 413),
       })(c, next)
     })
-
-    if (origins?.length) {
-      this.app.use(
-        '*',
-        cors({
-          origin: (origin: string) =>
-            origins.includes(origin) ? origin : null,
-          credentials: true,
-        }),
-      )
-    }
-
-    if (limit) {
-      const opts =
-        limit === true
-          ? { windowMs: 60_000, max: 120 }
-          : { windowMs: limit.interval, max: limit.max }
-      this.httpRateLimiter = rateLimiter(opts)
-      this.app.use('/__h', this.httpRateLimiter)
-    }
 
     this.app.post('/__h', (c) => this.handleRpc(c))
   }
@@ -251,6 +268,8 @@ export class NodeHonoTransport {
 
     const method = this.server.getMethod(payload.method as string)
     if (!method) {
+      if (payload.void === true) return c.text('', 200)
+
       return this.rpcError(c, Errors.METHOD_NOT_FOUND, {
         method: payload.method,
       })
@@ -259,6 +278,8 @@ export class NodeHonoTransport {
     const clientNode = await this.buildClientNode(c, transport.context)
 
     if (method.isProtected && !clientNode.authenticated) {
+      if (payload.void === true) return c.text('', 200)
+
       return this.rpcError(c, Errors.METHOD_FORBIDDEN, {
         method: payload.method,
       })

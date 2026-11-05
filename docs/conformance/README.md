@@ -7,11 +7,13 @@ tracks:
 - `typeferry-py/` (Python port)
 - `typeferry-rs/` (Rust port)
 - `typeferry-rb/` (Ruby port)
-- `typeferry-go/` (Go server, implementation in progress)
+- `typeferry-go/` (Go server)
 
-Each fixture is a frozen wire-contract point. An implementation is
-conformant iff every fixture produces the expected output using only
-the public wire surface described in `PROTOCOL.md`.
+Each fixture is a frozen wire-contract point. Every fixture MUST produce the
+expected output using the public wire surface described in `PROTOCOL.md`.
+Fixture success is a required gate, but does not establish coverage of every
+protocol requirement. Conformance also requires every applicable MUST in
+protocol sections 2–10.
 
 `PROTOCOL.md` is the wire authority. Fixtures are executable examples of that
 contract. If a fixture and the protocol disagree, stop and reconcile the
@@ -47,9 +49,16 @@ EJSON round-trip cases. Each file has:
 {
   "name": "human description",
   "value": {"__kind": "...", "...": ...},
-  "encoded": "<exact JSON.stringify output>"
+  "encoded": "<exact EJSON output>",
+  "canonical": false
 }
 ```
+
+`canonical` is optional and defaults to false. When true, both encoding checks
+use EJSON canonical mode, including decode-then-reencode. Fixtures 080 and 081
+cover JavaScript index-key enumeration, ordinary insertion order, recursive
+canonical order, and UTF-16 ordering of other keys. Fixture 032 covers short
+binary values with and without padding.
 
 `value` is a tagged Rust/Python/TS-neutral representation of the
 native value:

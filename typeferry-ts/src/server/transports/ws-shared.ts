@@ -201,6 +201,8 @@ export async function authenticateNode(
     return
   }
 
+  let authTimeout: ReturnType<typeof setTimeout> | undefined
+
   try {
     const auth = server.auth
     const authPromise: Promise<ClientNodeContext | false | null | undefined> = handshakeAuthenticator
@@ -213,9 +215,9 @@ export async function authenticateNode(
       : auth
         ? Promise.resolve(auth.call(node, token === undefined ? {} : { token }))
         : Promise.resolve<ClientNodeContext | false>(false)
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Auth timeout')), AUTH_TIMEOUT_MS)
-    )
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      authTimeout = setTimeout(() => reject(new Error('Auth timeout')), AUTH_TIMEOUT_MS)
+    })
 
     const result = await Promise.race([authPromise, timeoutPromise])
 
@@ -229,10 +231,19 @@ export async function authenticateNode(
 
     node.emitAuthResult(node.authenticated)
   } catch (error) {
+    // Context installation can reject an identity after the callback succeeds.
+    // Never report failure while leaving the node authorized for RPC dispatch.
+    if (node.userId) server.removeClientFromUserIndex(node)
+    node.userId = null
+    node.user = null
+    node.authenticated = false
+    node.setContext(null)
     console.error('[TypeFerry] Auth error:', error)
     if (node.socket?.readyState === SocketState.OPEN) {
       node.emitAuthResult(false)
     }
+  } finally {
+    if (authTimeout !== undefined) clearTimeout(authTimeout)
   }
 }
 
@@ -240,40 +251,54 @@ export async function authenticateNode(
 // Connection parameter validation
 // ---------------------------------------------------------------------------
 
-/** Validates and sanitizes a UUID from the client query string. */
+/**
+ * Preserves valid client identities and replaces invalid identities atomically.
+ * Removing characters could alias two distinct caller-supplied identities.
+ */
 export function validateUuid(uuid: unknown): string {
   if (
     typeof uuid !== 'string' ||
     uuid.length === 0 ||
-    uuid.length > MAX_UUID_LENGTH
+    uuid.length > MAX_UUID_LENGTH ||
+    !/^[a-zA-Z0-9-]+$/.test(uuid)
   ) {
     return (
       crypto.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(36).slice(2)}`
     )
   }
-  return uuid.replace(/[^a-zA-Z0-9-]/g, '').slice(0, MAX_UUID_LENGTH)
+  return uuid
 }
 
-/** Validates and sanitizes a meta object. */
+function isMetaObject(meta: unknown): meta is Record<string, unknown> {
+  return meta !== null && typeof meta === 'object' && !Array.isArray(meta)
+}
+
+/**
+ * Bounds metadata supplied as an object, where no raw JSON input is available.
+ */
 export function validateMeta(meta: unknown): Record<string, unknown> {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {}
+  if (!isMetaObject(meta)) return {}
   try {
-    if (JSON.stringify(meta).length > MAX_META_SIZE) {
+    if (Buffer.byteLength(JSON.stringify(meta), 'utf8') > MAX_META_SIZE) {
       console.warn('[TypeFerry] Meta object too large, ignoring')
       return {}
     }
   } catch {
     return {}
   }
-  return meta as Record<string, unknown>
+  return meta
 }
 
 /** Parses meta from a query string value (JSON-encoded in the URL). */
 export function parseMeta(raw: string | null): Record<string, unknown> {
-  if (!raw) return {}
+  if (!raw || Buffer.byteLength(raw, 'utf8') > MAX_META_SIZE) return {}
   try {
-    return validateMeta(JSON.parse(raw))
+    const meta: unknown = JSON.parse(raw)
+
+    // The protocol bounds the original bytes, not JSON.stringify's potentially
+    // longer numeric spellings after decoding a valid object.
+    return isMetaObject(meta) ? meta : {}
   } catch {
     return {}
   }

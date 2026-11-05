@@ -132,6 +132,29 @@ await server.isReady()
 
 Clients can call the method as `client.m.greeting.hello({ name: 'Ada' })` when parameterized with `GreetingApi`. The decorators turn the class method into an HTTP and WebSocket RPC endpoint, while `@Schema()` validates network input at runtime. The `Server` constructor installs both transports; call `server.close()` during graceful shutdown.
 
+### Origin admission
+
+Omitting `origins` permits any origin. A configured list admits exact matches;
+an empty list admits no named origins. Missing or mismatching origins receive
+HTTP 403 before RPC decoding, authentication, or rate consumption. WebSocket
+upgrades use the same policy.
+
+Trusted non-browser integrations can explicitly admit missing headers for each
+transport independently:
+
+```ts
+const server = new Server({
+  origins: ['https://app.example'],
+  allowOriginless: true, // HTTP RPC only
+  ws: { allowOriginless: true }, // WebSocket only
+})
+```
+
+Both options default to false. Neither option admits a mismatching named origin.
+Application health and static routes retain their own admission policies.
+When HTTP rate limiting is enabled, RPC responses include `RateLimit-Limit`,
+`RateLimit-Remaining`, and rounded-up relative `RateLimit-Reset` seconds.
+
 ## Development
 
 Run commands from `typeferry-ts/`:
