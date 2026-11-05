@@ -7,6 +7,7 @@ per-key counter within a fixed time window. Default bucket is
 
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -50,13 +51,12 @@ class SlidingWindowLimiter:
             bucket = deque()
             self._buckets[key] = bucket
 
-        while bucket and bucket[0] < window_start:
+        while bucket and bucket[0] <= window_start:
             bucket.popleft()
 
-        reset_ms = int(bucket[0] + self.limit.interval_ms - now) if bucket else 0
-
         if len(bucket) >= self.limit.max:
-            return False, 0, reset_ms
+            return False, 0, math.ceil(bucket[0] + self.limit.interval_ms - now)
 
         bucket.append(now)
+        reset_ms = math.ceil(bucket[0] + self.limit.interval_ms - now)
         return True, max(0, self.limit.max - len(bucket)), reset_ms

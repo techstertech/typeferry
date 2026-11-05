@@ -44,6 +44,25 @@ def test_date_from_json_round_trip() -> None:
     assert int(decoded.timestamp() * 1000) == int(dt.timestamp() * 1000)
 
 
+@pytest.mark.parametrize("millis", [-8_640_000_000_000_000, 8_640_000_000_000_000])
+def test_wide_javascript_dates_round_trip_without_datetime_assumptions(millis: int) -> None:
+    decoded = from_json_value({"$date": millis})
+
+    assert to_json_value(decoded) == {"$date": millis}
+    assert EJSON.stringify(decoded) == f'{{"$date":{millis}}}'
+
+
+@pytest.mark.parametrize(
+    "native", [datetime(1, 1, 1, tzinfo=UTC), datetime(9999, 12, 31, 23, 59, 59, 999000, tzinfo=UTC)]
+)
+def test_datetime_boundary_milliseconds_remain_exact(native: datetime) -> None:
+    delta = native - datetime(1970, 1, 1, tzinfo=UTC)
+    expected = (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
+
+    assert to_json_value(native) == {"$date": expected}
+    assert from_json_value({"$date": expected}) == native
+
+
 def test_naive_date_treated_as_utc() -> None:
     naive = datetime(2024, 6, 1, 12, 30, 45)
     encoded = to_json_value(naive)

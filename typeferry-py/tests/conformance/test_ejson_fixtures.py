@@ -35,7 +35,7 @@ def test_ejson_fixture_encodes_to_expected_wire_bytes(case_path: Path) -> None:
     fixture = load_json(case_path)
     register_custom_types(fixture.get("register", {}).get("custom_types", []))
     value = rehydrate(fixture["value"])
-    assert EJSON.stringify(value) == fixture["encoded"], (
+    assert EJSON.stringify(value, canonical=fixture.get("canonical", False)) == fixture["encoded"], (
         f"{case_path.name}: encoded output diverges from fixture"
     )
 
@@ -45,7 +45,7 @@ def test_ejson_fixture_decodes_and_re_encodes_identically(case_path: Path) -> No
     fixture = load_json(case_path)
     register_custom_types(fixture.get("register", {}).get("custom_types", []))
     decoded = EJSON.parse(fixture["encoded"])
-    re_encoded = EJSON.stringify(decoded)
+    re_encoded = EJSON.stringify(decoded, canonical=fixture.get("canonical", False))
     assert re_encoded == fixture["encoded"], (
         f"{case_path.name}: decode/re-encode loop diverges"
     )

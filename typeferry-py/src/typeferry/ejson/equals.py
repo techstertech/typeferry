@@ -9,6 +9,7 @@ import math
 from datetime import datetime
 from typing import Any
 
+from typeferry.ejson.converters import _EpochMilliseconds
 from typeferry.ejson.custom_types import is_custom_type
 from typeferry.ejson.to_from_json_value import to_json_value
 
@@ -62,6 +63,12 @@ def equals(a: Any, b: Any, *, key_order_sensitive: bool = False) -> bool:
         return False
 
     # Special reference types.
+    if isinstance(a, _EpochMilliseconds) or isinstance(b, _EpochMilliseconds):
+        return (
+            isinstance(a, _EpochMilliseconds)
+            and isinstance(b, _EpochMilliseconds)
+            and a.milliseconds == b.milliseconds
+        )
     if isinstance(a, datetime) and isinstance(b, datetime):
         return bool(a == b)
     if isinstance(a, datetime) or isinstance(b, datetime):

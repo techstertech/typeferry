@@ -4,6 +4,7 @@
 
 - fix(go): enforce protocol admission and serialization contracts
 - fix(go): reject explicitly empty origin headers
+- fix(python): enforce protocol boundaries and complete EJSON parity
 
 ## 2026-10-28
 

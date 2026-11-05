@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from typeferry.ejson.base64 import decode_base64, encode_base64
@@ -87,25 +87,62 @@ class Converter:
 # ---------------------------------------------------------------------------
 
 
-def _date_to_json(obj: datetime) -> dict[str, int]:
+_DATE_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_MAX_JAVASCRIPT_DATE_MS = 8_640_000_000_000_000
+_MICROSECONDS_PER_MILLISECOND = 1000
+_SECONDS_PER_DAY = 86400
+
+
+@dataclass(frozen=True, slots=True)
+class _EpochMilliseconds:
+    """Opaque round-trip value for JavaScript dates beyond datetime's range."""
+
+    milliseconds: int
+
+
+def _date_to_json(obj: datetime | _EpochMilliseconds) -> dict[str, int]:
     """Encode a datetime as ``{"$date": <ms since epoch>}``.
 
     Naive datetimes are treated as UTC (matching JS ``Date`` semantics,
     which has no timezone concept beyond the underlying epoch ms).
     """
 
-    epoch = obj.replace(tzinfo=UTC).timestamp() if obj.tzinfo is None else obj.timestamp()
-    return {"$date": round(epoch * 1000)}
+    if isinstance(obj, _EpochMilliseconds):
+        return {"$date": obj.milliseconds}
+
+    native = obj.replace(tzinfo=UTC) if obj.tzinfo is None else obj
+    delta = native - _DATE_EPOCH
+    microseconds = (
+        (delta.days * _SECONDS_PER_DAY + delta.seconds) * 1_000_000 + delta.microseconds
+    )
+    milliseconds, remainder = divmod(microseconds, _MICROSECONDS_PER_MILLISECOND)
+
+    # Preserve the existing nearest-even microsecond rounding without losing
+    # millisecond precision through floating-point timestamps near year 9999.
+    half = _MICROSECONDS_PER_MILLISECOND // 2
+    if remainder > half or (remainder == half and milliseconds % 2):
+        milliseconds += 1
+    return {"$date": milliseconds}
 
 
-def _date_from_json(obj: dict[str, Any]) -> datetime:
+def _date_from_json(obj: dict[str, Any]) -> datetime | _EpochMilliseconds:
     ms = obj["$date"]
-    return datetime.fromtimestamp(ms / 1000, tz=UTC)
+    if (
+        not isinstance(ms, (int, float)) or abs(ms) > _MAX_JAVASCRIPT_DATE_MS
+        or (isinstance(ms, float) and not math.isfinite(ms))
+    ):
+        raise ValueError("Invalid JavaScript date milliseconds")
+
+    milliseconds = int(ms)
+    try:
+        return _DATE_EPOCH + timedelta(milliseconds=milliseconds)
+    except OverflowError:
+        return _EpochMilliseconds(milliseconds)
 
 
 _DATE_CONVERTER = Converter(
     match_json_value=lambda o: _has_keys(o, "$date"),
-    match_object=lambda o: isinstance(o, datetime),
+    match_object=lambda o: isinstance(o, (datetime, _EpochMilliseconds)),
     to_json_value=_date_to_json,
     from_json_value=_date_from_json,
 )

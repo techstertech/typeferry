@@ -9,7 +9,7 @@ Implements PROTOCOL.md §2.1:
 * response envelope ``{type: "result", uuid?, method, result}`` or
   ``{type: "error", message, uuid?, errors?, method?}``
 * ``x-client-id`` / ``x-api-key`` (Bearer-prefix stripped) header semantics
-* void calls silently suppress error and result bodies
+* void calls suppress error bodies and retain successful result bodies
 * CORS with allow-credentials when origins are provided
 * sliding-window rate limiter, 120 req / 60 s by default
 
@@ -37,7 +37,9 @@ from typeferry.protocol.constants import (
     TOKEN_HEADER_KEY,
 )
 from typeferry.protocol.messages import PayloadType
+from typeferry.server._authentication import authentication_succeeded
 from typeferry.server.client_node import ClientNode
+from typeferry.server.transports._origins import origin_allowed
 from typeferry.server.transports.rate_limit import RateLimit, SlidingWindowLimiter
 from typeferry.utils.errors import Errors, PublicError, SchemaValidationError
 
@@ -46,7 +48,13 @@ if TYPE_CHECKING:
 
 
 class HttpTransport:
-    """Starlette-backed HTTP transport bound to a :class:`Server`."""
+    """Starlette-backed HTTP transport bound to a :class:`Server`.
+
+    ``origins=None`` permits any origin; an empty list denies named origins.
+    With an allowlist, ``allow_originless=True`` admits requests whose Origin
+    header is absent. This option never permits a mismatching named origin.
+    WebSocket originless admission is configured independently.
+    """
 
     server: Server
     app: Starlette
@@ -59,9 +67,12 @@ class HttpTransport:
         server: Server,
         origins: list[str] | None = None,
         rate_limit: RateLimit | bool | None = True,
+        *,
+        allow_originless: bool = False,
     ) -> None:
         self.server = server
-        self.origins = origins
+        self.origins = None if origins is None else list(origins)
+        self.allow_originless = allow_originless
 
         if rate_limit is True:
             self.rate_limit = RateLimit()
@@ -75,7 +86,7 @@ class HttpTransport:
         )
 
         middleware: list[Middleware] = []
-        if origins:
+        if origins is not None:
             middleware.append(
                 Middleware(
                     CORSMiddleware,
@@ -101,16 +112,28 @@ class HttpTransport:
     # ------------------------------------------------------------------
 
     async def _handle(self, request: Request) -> Response:
+        if not origin_allowed(
+            request.headers.get("origin"), self.origins,
+            allow_originless=self.allow_originless,
+        ):
+            return Response("", status_code=403)
+
+        rate_headers: dict[str, str] = {}
+
         # Rate limit first — clients that flood with malformed bodies
         # still cost parsing work, which the limiter protects against.
         if self.limiter is not None:
             key = _client_ip(request)
             allowed, remaining, reset_ms = self.limiter.try_consume(key)
+            rate_headers = _rate_limit_headers(self, remaining, reset_ms)
             if not allowed:
-                return Response(
-                    "", status_code=429, headers=_rate_limit_headers(self, remaining, reset_ms)
-                )
+                return Response("", status_code=429, headers=rate_headers)
 
+        response = await self._dispatch(request)
+        response.headers.update(rate_headers)
+        return response
+
+    async def _dispatch(self, request: Request) -> Response:
         request_body = (await request.body()).decode("utf-8", errors="replace")
         transport = _parse_transport(request_body)
 
@@ -130,13 +153,13 @@ class HttpTransport:
         if method is None:
             return self._error(Errors.METHOD_NOT_FOUND.value, None, method_name, is_void)
 
-        node = await self._build_client_node(request, transport.get("context"))
-
-        if method.is_protected and not node.authenticated:
-            # METHOD_FORBIDDEN: TS envelope carries method, no uuid.
-            return self._error(Errors.METHOD_FORBIDDEN.value, None, method_name, is_void)
-
         try:
+            node = await self._build_client_node(request, transport.get("context"))
+
+            if method.is_protected and not node.authenticated:
+                # METHOD_FORBIDDEN: TS envelope carries method, no uuid.
+                return self._error(Errors.METHOD_FORBIDDEN.value, None, method_name, is_void)
+
             result = await method.exec(payload.get("params"), node)
         except PublicError as err:
             # PublicError: TS envelope carries uuid, no method.
@@ -206,9 +229,8 @@ class HttpTransport:
         if inspect.isawaitable(result):
             result = await result
 
-        node.authenticated = bool(result)
-        if node.authenticated:
-            node.set_context(result if isinstance(result, dict) else {})
+        node.authenticated = authentication_succeeded(result)
+        node.set_context(result if node.authenticated and isinstance(result, dict) else None)
         return node
 
     def _drain_response_headers(self, node: ClientNode) -> list[tuple[str, str]]:
@@ -297,5 +319,5 @@ def _rate_limit_headers(
     return {
         "RateLimit-Limit": str(transport.rate_limit.max),
         "RateLimit-Remaining": str(remaining),
-        "RateLimit-Reset": str(max(0, reset_ms) // 1000),
+        "RateLimit-Reset": str((max(0, reset_ms) + 999) // 1000),
     }

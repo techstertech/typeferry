@@ -53,9 +53,26 @@ register(server, GreetingMethods())
 
 The registered wire names are `greeting.hello` and `greeting.profile`. Add `@schema(...)`, `@cached(...)`, and `@use(...)` where runtime validation, caching, or middleware is required. Python annotations do not validate untrusted network data by themselves.
 
+EJSON decodes ordinary dates as UTC `datetime` values. Valid JavaScript dates
+outside Python's year 1–9999 range use an opaque internal value. Pass that value
+back to `EJSON.stringify` or `to_json_value` to preserve the exact milliseconds.
+Do not assume every decoded date supports `datetime` methods. Object encoding
+follows JavaScript index-key order; canonical non-index keys use UTF-16 order.
+
 ## Attach transports
 
 Unlike the TypeScript server, the Python `Server` does not open a listener. An application attaches the HTTP and/or WebSocket adapters from `typeferry.server.transports` to its ASGI host. Redis is optional and propagates events among instances. Review the transport tests and [`scripts/conformance_server.py`](scripts/conformance_server.py) for executable assembly against the current APIs.
+
+Both transports accept `origins=None` for unrestricted admission. An explicit
+empty list rejects all named origins. A configured allowlist rejects missing
+and mismatching `Origin` headers before authentication or dispatch. Set
+`allow_originless=True` separately on `HttpTransport` or `WebSocketTransport`
+only for trusted callers without an `Origin` header. This option does not admit
+a mismatching named origin.
+
+Enabled HTTP rate limits add `RateLimit-Limit`, `RateLimit-Remaining`, and
+`RateLimit-Reset` to every admitted response, including RPC errors and HTTP 429.
+Reset values are relative seconds rounded up from the current quota window.
 
 Application-owned WebSocket handshake authentication can be configured without copying credentials into a URL:
 
@@ -73,16 +90,20 @@ transport = WebSocketTransport(
 )
 ```
 
-The callback takes precedence over query-token auth. Rejection, exceptions, and the five-second timeout fail closed. Validate origins, keep credentials out of logs and URLs, and perform resource authorization inside protected methods.
+The callback takes precedence over query-token auth. Rejection, exceptions, and
+the five-second timeout fail closed. Late results cannot authenticate the
+connection. Authentication uses JavaScript truthiness: empty objects and arrays
+succeed; null, false, zero, NaN, and empty strings fail. Keep credentials out of
+logs and URLs. Perform resource authorization inside protected methods.
 
 ## Development and verification
 
 ```sh
 cd typeferry-py
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,all]'
 ruff check .
 mypy
-pytest
+python -m pytest
 ```
 
 ## Boundaries and references

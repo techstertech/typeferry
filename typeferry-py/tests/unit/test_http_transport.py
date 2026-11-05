@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -295,3 +296,116 @@ async def test_binary_round_trip_on_wire() -> None:
     )
     decoded = Presentation.decode(response.text)
     assert decoded["result"] == {"out": b"\x01\x02\x03"}
+
+
+@pytest.mark.parametrize(
+    ("origins", "origin", "allow_originless", "status"),
+    [
+        (None, None, False, 200),
+        (None, "https://other.test", False, 200),
+        ([], None, False, 403),
+        ([], "https://allowed.test", False, 403),
+        ([], None, True, 200),
+        ([""], "", True, 403),
+        (["https://allowed.test"], None, False, 403),
+        (["https://allowed.test"], None, True, 200),
+        (["https://allowed.test"], "https://other.test", True, 403),
+        (["https://allowed.test"], "https://allowed.test", False, 200),
+    ],
+)
+@pytest.mark.asyncio
+async def test_origin_admission_precedes_auth_and_rate_consumption(
+    origins: list[str] | None, origin: str | None, allow_originless: bool, status: int
+) -> None:
+    server = Server(ServerOptions())
+    calls: list[str] = []
+
+    async def auth(_node: Any, _context: Any) -> dict[str, str]:
+        calls.append("auth")
+        return {"role": "reader"}
+
+    async def handler(_node: Any, _params: Any) -> bool:
+        calls.append("handler")
+        return True
+
+    server.set_auth(AuthSetup(auth=auth, log_in=handler))
+    server.add_method("probe", handler)
+    transport = HttpTransport(
+        server, origins=origins, allow_originless=allow_originless,
+        rate_limit=RateLimit(max=1),
+    )
+    headers = {} if origin is None else {"origin": origin}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app), base_url="http://test"
+    ) as client:
+        response = await _post(client, {"payload": {"method": "probe"}}, headers)
+
+    assert response.status_code == status
+    assert calls == (["auth", "handler"] if status == 200 else [])
+    if status == 403:
+        assert not any(name.startswith("ratelimit") for name in response.headers)
+        assert transport.limiter is not None
+        assert transport.limiter.try_consume("127.0.0.1")[0]
+
+
+@pytest.mark.parametrize("outcome", [None, False, 0, -0.0, float("nan"), "", {}, []])
+@pytest.mark.asyncio
+async def test_http_authentication_uses_javascript_truthiness(outcome: Any) -> None:
+    server, client = _build()
+
+    async def auth(_node: Any, _context: Any) -> Any:
+        return outcome
+
+    async def handler(node: Any, _params: Any) -> bool:
+        return node.authenticated
+
+    server.set_auth(AuthSetup(auth=auth, log_in=handler))
+    server.add_method("probe", handler)
+
+    response = await _post(client, {"payload": {"method": "probe"}})
+
+    assert response.json()["result"] is isinstance(outcome, (dict, list))
+    await client.aclose()
+
+
+@pytest.mark.parametrize("method,is_void", [("ok", False), ("missing", False), ("ok", True), ("missing", True)])
+@pytest.mark.asyncio
+async def test_rate_headers_cover_admitted_responses_and_preserve_cookies(
+    method: str, is_void: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "typeferry.server.transports.rate_limit.time", SimpleNamespace(monotonic=lambda: 0.0)
+    )
+    server, client = _build(rate_limit=RateLimit(max=2, interval_ms=1001))
+
+    async def handler(node: Any, _params: Any) -> bool:
+        node._pending_response_headers.append(("set-cookie", "first=1"))
+        node._pending_response_headers.append(("set-cookie", "second=2"))
+        return True
+
+    server.add_method("ok", handler)
+    body = {"payload": {"method": method, "void": is_void}}
+
+    async with client:
+        response = await _post(client, body)
+        assert response.headers["RateLimit-Limit"] == "2"
+        assert response.headers["RateLimit-Remaining"] == "1"
+        assert response.headers["RateLimit-Reset"] == "2"
+        if method == "ok":
+            assert response.headers.get_list("set-cookie") == ["first=1", "second=2"]
+
+        await _post(client, body)
+        blocked = await _post(client, body)
+
+    assert blocked.status_code == 429
+    assert blocked.headers["RateLimit-Remaining"] == "0"
+    assert blocked.headers["RateLimit-Reset"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_disabled_limiter_emits_no_rate_headers() -> None:
+    _, client = _build(rate_limit=False)
+    async with client:
+        response = await _post(client, {"payload": {"method": "missing"}})
+    assert not any(name.startswith("ratelimit") for name in response.headers)

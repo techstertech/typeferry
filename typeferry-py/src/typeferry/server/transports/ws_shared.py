@@ -8,17 +8,19 @@ ASGI, etc.). See PROTOCOL.md §2.2.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from typeferry.ejson.presentation import Presentation
 from typeferry.protocol.constants import ServerEvents
 from typeferry.protocol.messages import MessageType
+from typeferry.server._authentication import authentication_succeeded
 from typeferry.server.socket import SocketState
 from typeferry.utils.errors import Errors, PublicError, SchemaValidationError
 
@@ -177,28 +179,52 @@ async def authenticate_node(
     ``{t:"auth", authenticated: false}`` matching PROTOCOL.md §2.2.2.
     """
 
+    node.authenticated = False
+    node.set_context(None)
+
     if handshake_authenticator is None and (not server.is_auth_enabled or not token):
         await node.emit_auth_result(False)
         return
 
     async def _run_auth() -> Any:
-        import inspect as _inspect
+        outcome: Any
 
         if handshake_authenticator is not None:
             metadata = handshake or WebSocketHandshake(path="", headers={}, query={})
-            outcome = handshake_authenticator(node, metadata)
+            if inspect.iscoroutinefunction(handshake_authenticator):
+                outcome = handshake_authenticator(node, metadata)
+            else:
+                outcome = await asyncio.to_thread(handshake_authenticator, node, metadata)
         else:
             fn = server.auth
             if fn is None:
                 return False
-            outcome = fn(node, {"token": token})
-        if _inspect.isawaitable(outcome):
+            if inspect.iscoroutinefunction(fn):
+                outcome = fn(node, {"token": token})
+            else:
+                outcome = await asyncio.to_thread(fn, node, {"token": token})
+        if inspect.isawaitable(outcome):
             return await outcome
         return outcome
 
+    task = asyncio.create_task(_run_auth())
+    task.add_done_callback(_discard_auth_task_error)
+
     try:
-        result = await asyncio.wait_for(_run_auth(), timeout=AUTH_TIMEOUT_MS / 1000)
-    except (TimeoutError, Exception):
+        completed, _ = await asyncio.wait({task}, timeout=AUTH_TIMEOUT_MS / 1000)
+        if not completed:
+            # Waiting for cancellation would let a callback that catches it
+            # exceed the deadline or return a late authenticated result.
+            task.cancel()
+            result = None
+        else:
+            result = task.result()
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+    except Exception:
+        node.authenticated = False
+        node.set_context(None)
         if node.socket is not None and node.socket.readyState == SocketState.OPEN:
             await node.emit_auth_result(False)
         return
@@ -206,12 +232,20 @@ async def authenticate_node(
     if node.socket is None or node.socket.readyState != SocketState.OPEN:
         return
 
-    if result:
-        node.authenticated = True
-        node.set_context(result if isinstance(result, dict) else {})
+    node.authenticated = authentication_succeeded(result)
+    node.set_context(result if node.authenticated and isinstance(result, dict) else None)
+
+    if node.authenticated:
         server.emit_server_event(ServerEvents.AUTHENTICATION, node)
 
     await node.emit_auth_result(node.authenticated)
+
+
+def _discard_auth_task_error(task: asyncio.Task[Any]) -> None:
+    """Retrieve a detached callback's error after its authentication deadline."""
+
+    if not task.cancelled():
+        task.exception()
 
 
 # ---------------------------------------------------------------------------
@@ -220,19 +254,21 @@ async def authenticate_node(
 
 
 def validate_uuid(uuid: Any) -> str:
-    """Sanitize a client-supplied UUID or synthesize a fresh one."""
+    """Keep valid client UUIDs unchanged; replace invalid identities entirely."""
 
-    if not isinstance(uuid, str) or not uuid or len(uuid) > MAX_UUID_LENGTH:
+    if (
+        not isinstance(uuid, str) or not uuid or len(uuid) > MAX_UUID_LENGTH
+        or _UUID_SANITIZE.search(uuid) is not None
+    ):
         return secrets.token_hex(16)
-    cleaned = _UUID_SANITIZE.sub("", uuid)[:MAX_UUID_LENGTH]
-    return cleaned or secrets.token_hex(16)
+    return uuid
 
 
 def validate_meta(meta: Any) -> dict[str, Any]:
     if not isinstance(meta, dict) or isinstance(meta, list):
         return {}
     try:
-        if len(json.dumps(meta)) > MAX_META_SIZE:
+        if len(json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_META_SIZE:
             _log.warning("Meta object too large, ignoring")
             return {}
     except (TypeError, ValueError):
@@ -244,6 +280,15 @@ def parse_meta(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
     try:
-        return validate_meta(json.loads(raw))
-    except (ValueError, TypeError):
+        if len(raw.encode("utf-8")) > MAX_META_SIZE:
+            return {}
+        decoded = json.loads(raw, parse_constant=_reject_json_constant)
+        return decoded if isinstance(decoded, dict) else {}
+    except (ValueError, TypeError, RecursionError):
         return {}
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    """JSON.parse rejects literal NaN and Infinity tokens accepted by Python."""
+
+    raise ValueError(f"Invalid JSON number: {value}")

@@ -33,3 +33,9 @@ def test_indent_two_adds_whitespace() -> None:
 
 def test_unicode_is_not_escaped() -> None:
     assert stable_stringify({"v": "café"}) == '{"v":"café"}'
+
+
+def test_javascript_index_keys_precede_canonical_utf16_keys() -> None:
+    value = {"\ue000": 1, "\U00010000": 2, "10": {"2": 3, "1": 4}, "2": 5}
+
+    assert stable_stringify(value) == '{"2":5,"10":{"1":4,"2":3},"𐀀":2,"":1}'

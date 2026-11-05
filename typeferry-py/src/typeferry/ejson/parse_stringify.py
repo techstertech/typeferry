@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from typeferry.ejson.stable_stringify import stable_stringify
+from typeferry.ejson.stable_stringify import javascript_object_order, stable_stringify
 from typeferry.ejson.to_from_json_value import from_json_value, to_json_value
 
 
@@ -49,7 +49,7 @@ def stringify(
 
     separators = (",", ":") if space is None else None
     return json.dumps(
-        json_value,
+        javascript_object_order(json_value),
         indent=space,
         separators=separators,
         ensure_ascii=False,

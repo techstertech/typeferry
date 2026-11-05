@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from typeferry.ejson import EJSONRegExp, add_type
+from typeferry.ejson import EJSONRegExp, add_type, from_json_value
 from typeferry.ejson.base64 import decode_base64
 from typeferry.ejson.custom_types import _clear_registry_for_tests
 from typeferry.server.method import MethodOptions
@@ -88,7 +87,7 @@ def rehydrate(node: Any) -> Any:
             out[key] = rehydrate(value)
         return out
     if kind == "date":
-        return datetime.fromtimestamp(node["millis"] / 1000, tz=UTC)
+        return from_json_value({"$date": node["millis"]})
     if kind == "binary":
         return decode_base64(node["base64"])
     if kind == "regex":

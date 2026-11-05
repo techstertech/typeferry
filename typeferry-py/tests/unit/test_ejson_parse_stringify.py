@@ -10,6 +10,12 @@ import pytest
 from typeferry.ejson import EJSON, parse, stringify
 
 
+def test_stringify_orders_index_keys_recursively_before_insertion_order() -> None:
+    value = {"z": {"10": 10, "2": 2, "01": 1}, "10": 10, "2": 2, "a": 0}
+
+    assert EJSON.stringify(value) == '{"2":2,"10":10,"z":{"2":2,"10":10,"01":1},"a":0}'
+
+
 def test_string_round_trip() -> None:
     text = stringify({"name": "Alice", "age": 30})
     assert text == '{"name":"Alice","age":30}'

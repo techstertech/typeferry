@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from typeferry.ejson import equals
+import pytest
+
+from typeferry.ejson import EJSON, equals
 
 
 def test_identical_primitives() -> None:
@@ -34,6 +36,23 @@ def test_datetime_mismatch() -> None:
     a = datetime(2024, 1, 1, tzinfo=UTC)
     b = datetime(2024, 1, 2, tzinfo=UTC)
     assert not equals(a, b)
+
+
+@pytest.mark.parametrize("millis", [-8_640_000_000_000_000, 8_640_000_000_000_000])
+def test_full_range_dates_compare_by_date_value(millis: int) -> None:
+    encoded = f'{{"$date":{millis}}}'
+    first = EJSON.parse(encoded)
+    same = EJSON.parse(encoded)
+    different = EJSON.from_json_value({"$date": -millis})
+
+    assert first is not same
+    assert equals(first, same)
+    assert equals({"dates": [first]}, {"dates": [same]})
+    assert not equals(first, different)
+
+    for other in [millis, str(millis), {"$date": millis}, datetime(2024, 1, 1, tzinfo=UTC)]:
+        assert not equals(first, other)
+        assert not equals(other, first)
 
 
 def test_binary_equality() -> None:

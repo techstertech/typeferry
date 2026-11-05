@@ -29,6 +29,7 @@ from typeferry.protocol.constants import TYPEFERRY_WS_PATH, ServerEvents
 from typeferry.server.client_node import ClientNode
 from typeferry.server.room_registry import RoomRegistry
 from typeferry.server.socket import SocketState
+from typeferry.server.transports._origins import origin_allowed
 from typeferry.server.transports.ws_shared import (
     PING_INTERVAL_MS,
     PING_PAYLOAD,
@@ -87,7 +88,12 @@ class StarletteSocket:
 
 
 class WebSocketTransport:
-    """Starlette-backed WebSocket transport bound to a :class:`Server`."""
+    """Starlette-backed WebSocket transport bound to a :class:`Server`.
+
+    A configured allowlist rejects absent origins unless ``allow_originless``
+    is explicitly enabled. An empty list denies all named origins. HTTP
+    originless admission is a separate transport option.
+    """
 
     server: Server
     rooms: RoomRegistry
@@ -102,11 +108,14 @@ class WebSocketTransport:
         origins: list[str] | None = None,
         path: str = TYPEFERRY_WS_PATH,
         handshake_authenticator: WebSocketHandshakeAuthenticator | None = None,
+        *,
+        allow_originless: bool = False,
     ) -> None:
         self.server = server
         self.rooms = RoomRegistry()
         self.path = path
-        self.origins = set(origins) if origins else None
+        self.origins = None if origins is None else set(origins)
+        self.allow_originless = allow_originless
         self.accept_connections = True
         self.handshake_authenticator = handshake_authenticator
         self.route = WebSocketRoute(path, self._endpoint)
@@ -128,7 +137,7 @@ class WebSocketTransport:
             return
 
         origin = ws.headers.get("origin")
-        if self.origins is not None and origin and origin not in self.origins:
+        if not origin_allowed(origin, self.origins, allow_originless=self.allow_originless):
             await ws.close(code=4403)
             return
 

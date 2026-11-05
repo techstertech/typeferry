@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
+from urllib.parse import urlencode
 
 import pytest
 from starlette.applications import Starlette
@@ -20,6 +23,135 @@ from typeferry.server.transports.ws_shared import (
     validate_uuid,
 )
 from typeferry.utils.errors import Errors, PublicError
+
+
+@pytest.mark.parametrize(
+    ("origins", "origin", "allow_originless", "accepted"),
+    [
+        (None, None, False, True),
+        (None, "https://other.test", False, True),
+        ([], None, False, False),
+        ([], "https://allowed.test", False, False),
+        ([], None, True, True),
+        ([""], "", True, False),
+        (["https://allowed.test"], None, False, False),
+        (["https://allowed.test"], None, True, True),
+        (["https://allowed.test"], "https://other.test", True, False),
+        (["https://allowed.test"], "https://allowed.test", False, True),
+    ],
+)
+def test_websocket_origin_admission_precedes_authentication(
+    origins: list[str] | None, origin: str | None, allow_originless: bool, accepted: bool
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    calls: list[str] = []
+    server = Server(ServerOptions())
+
+    async def authenticate(_node: Any, _handshake: Any) -> dict[str, str]:
+        calls.append("auth")
+        return {"role": "reader"}
+
+    transport = WebSocketTransport(
+        server, origins=origins, allow_originless=allow_originless,
+        handshake_authenticator=authenticate,
+    )
+    server.websocket_transport = transport
+    headers = {} if origin is None else {"origin": origin}
+    with TestClient(Starlette(routes=transport.routes())) as client:
+        if accepted:
+            with client.websocket_connect(TYPEFERRY_WS_PATH, headers=headers) as ws:
+                assert ws.receive_json() == {"t": "auth", "authenticated": True}
+        else:
+            with pytest.raises(WebSocketDisconnect), client.websocket_connect(TYPEFERRY_WS_PATH, headers=headers):
+                pytest.fail("rejected origin reached an accepted socket")
+
+    assert calls == (["auth"] if accepted else [])
+
+
+@pytest.mark.parametrize("outcome", [None, False, 0, -0.0, float("nan"), "", {}, []])
+def test_websocket_handshake_uses_javascript_authentication_truthiness(outcome: Any) -> None:
+    server = Server(ServerOptions())
+
+    async def authenticate(_node: Any, _handshake: Any) -> Any:
+        return outcome
+
+    transport = WebSocketTransport(server, handshake_authenticator=authenticate)
+    server.websocket_transport = transport
+    with (
+        TestClient(Starlette(routes=transport.routes())) as client,
+        client.websocket_connect(TYPEFERRY_WS_PATH) as ws,
+    ):
+        assert ws.receive_json() == {
+            "t": "auth", "authenticated": isinstance(outcome, (dict, list)),
+        }
+
+
+def test_authentication_timeout_ignores_callback_that_suppresses_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typeferry.server.transports import ws_shared
+
+    monkeypatch.setattr(ws_shared, "AUTH_TIMEOUT_MS", 10)
+    server = Server(ServerOptions())
+
+    async def authenticate(_node: Any, _handshake: Any) -> dict[str, Any]:
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            return {"user": {"_id": "late"}}
+        return {"user": {"_id": "late"}}
+
+    transport = WebSocketTransport(server, handshake_authenticator=authenticate)
+    server.websocket_transport = transport
+    with (
+        TestClient(Starlette(routes=transport.routes())) as client,
+        client.websocket_connect(TYPEFERRY_WS_PATH) as ws,
+    ):
+        assert ws.receive_json() == {"t": "auth", "authenticated": False}
+        assert all(not node.authenticated for node in server.all_clients.values())
+
+
+@pytest.mark.parametrize("uuid", ["abc$def", "a/b", "", "a" * 65])
+def test_invalid_uuid_is_replaced_instead_of_partially_sanitized(uuid: str) -> None:
+    replacement = validate_uuid(uuid)
+    assert replacement != uuid
+    assert replacement != "abcdef"
+    assert replacement != "ab"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"$date":123}',
+        json.dumps({"value": "é" * 2000}, ensure_ascii=False),
+        '{"value":"ok"}' + " " * 10_000,
+        json.dumps(["invalid"]),
+        pytest.param(
+            '{"values":[' + ",".join("1e1" for _ in range(2000)) + "]}",
+            id="compact-numbers-use-raw-byte-budget",
+        ),
+    ],
+)
+def test_handshake_metadata_uses_raw_json_and_utf8_input_size(raw: str) -> None:
+    server = Server(ServerOptions())
+    seen: list[dict[str, Any]] = []
+
+    async def authenticate(node: Any, _handshake: Any) -> dict[str, str]:
+        seen.append(node.meta)
+        return {"role": "reader"}
+
+    transport = WebSocketTransport(server, handshake_authenticator=authenticate)
+    server.websocket_transport = transport
+    with (
+        TestClient(Starlette(routes=transport.routes())) as client,
+        client.websocket_connect(TYPEFERRY_WS_PATH + "?" + urlencode({"meta": raw})) as ws,
+    ):
+        assert ws.receive_json()["authenticated"] is True
+
+    decoded = json.loads(raw)
+    expected = decoded if isinstance(decoded, dict) and len(raw.encode("utf-8")) <= 10_000 else {}
+    assert seen == [expected]
 
 
 def _build() -> tuple[Server, TestClient]:
@@ -271,7 +403,7 @@ def test_malformed_frame_ignored() -> None:
     "uuid,expected_prefix",
     [
         ("simple-uuid", "simple-uuid"),
-        ("bad$chars!here", "badcharshere"),
+        ("bad$chars!here", None),
         ("", None),
         ("a" * 128, None),
     ],
@@ -300,5 +432,6 @@ def test_uuid_query_param_is_applied(uuid: str, expected_prefix: str | None) -> 
     if expected_prefix:
         assert captured[0] == expected_prefix
     else:
-        # Sanitized empty/oversize uuids fall back to random hex (32 chars).
+        # Invalid uuids receive a fresh identity instead of a partial rewrite.
         assert len(captured[0]) >= 16
+        assert captured[0] != "badcharshere"
