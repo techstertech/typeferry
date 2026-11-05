@@ -14,7 +14,7 @@ Use this runbook for any change visible across HTTP, WebSocket, Redis, EJSON, au
 1. Write the acceptance examples as shared fixtures under `docs/conformance/fixtures/` when the fixture model supports the behavior.
 2. Update `PROTOCOL.md` with the normative envelope, default, error, or lifecycle semantics.
 3. Implement the TypeScript behavior and its focused tests.
-4. Update Python, Rust, and Ruby in the same change when they implement the affected surface. If parity cannot land together, document the explicit gap and prevent fixtures from claiming unsupported conformance.
+4. Update Python, Rust, Ruby, and Go in the same change when they implement the affected surface. If parity cannot land together, document the explicit gap and prevent fixtures from claiming unsupported conformance.
 5. Update fixture documentation when a schema or case convention changes.
 6. Run focused fixture tests, then each affected implementation's full relevant suites.
 7. Record a decision when the choice changes future compatibility, security, or architecture.
@@ -46,11 +46,26 @@ From `typeferry-rb/`:
 bundle exec rake test:conformance
 ```
 
+From `typeferry-go/`:
+
+```sh
+go test ./ejson ./httptransport ./websocket ./redistransport
+```
+
 Run cross-language integration from `typeferry-ts/` when the affected servers are available:
 
 ```sh
-npm run test:integration -- src/test/conformance/cross-lang.integration.spec.ts src/test/conformance/cross-lang-rs.integration.spec.ts src/test/conformance/cross-lang-rb.integration.spec.ts
+TYPEFERRY_RUBY_INTEGRATION=1 npm run test:integration -- src/test/conformance/cross-lang.integration.spec.ts src/test/conformance/cross-lang-rs.integration.spec.ts src/test/conformance/cross-lang-rb.integration.spec.ts src/test/conformance/cross-lang-go-http.integration.spec.ts src/test/conformance/cross-lang-go-ws.integration.spec.ts
 ```
+
+Ruby interoperability is opt-in and otherwise skips silently. If nested commands
+select another Ruby runtime, set `TYPEFERRY_RUBY_EXECUTABLE` to the pinned
+`bundle` executable. Set `TYPEFERRY_RUBY_EXECUTABLE_ARGS` to a JSON array containing
+`"exec"` and the pinned `ruby` executable path.
+
+Fixture success does not establish coverage of every requirement in protocol
+sections 2–10. Review uncovered requirements and verify negative assertions,
+including void-call silence, authentication timeouts, and origin admission.
 
 ## Acceptance criteria
 

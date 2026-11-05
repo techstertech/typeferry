@@ -12,6 +12,12 @@ default:
 install-npm-toolchain:
     mise install
 
+# Audit both independent npm lockfiles, including development dependencies.
+audit-npm-dependencies:
+    # Invoke npm through pinned Node; nested shells can select a host Node.
+    cd {{ package_dir }} && mise exec -- node "$(mise which npm)" audit --audit-level=low
+    cd template && mise exec -- node "$(mise which npm)" audit --audit-level=low
+
 # Run the complete non-uploading npm release and artifact gate.
 verify-npm-release: install-npm-toolchain
     test "$(mise exec -- node --version)" = "v24.19.0"
