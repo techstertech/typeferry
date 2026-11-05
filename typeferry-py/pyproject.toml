@@ -29,10 +29,14 @@ redis = [
   "redis>=5.2",
 ]
 auth = [
-  "pyjwt>=2.10",
+  "pyjwt>=2.15.0",
   "ua-parser>=1.0",
-  "authlib>=1.6",
+  "authlib>=1.9.1",
   "google-auth>=2.38",
+  # Constrain vulnerable transitive releases used by the auth integrations.
+  "certifi>=2026.10.18",
+  "joserfc>=1.7.6",
+  "pyasn1>=0.6.5",
 ]
 schema = [
   "pydantic>=2.11",
