@@ -78,61 +78,53 @@ pub mod base64 {
 
         let lookup = build_lookup();
         let bytes = value.as_bytes();
-
-        let pad_index = bytes.iter().position(|&b| b == b'=');
-        let valid_length = pad_index.unwrap_or(bytes.len());
-        let placeholder_length = if valid_length == bytes.len() {
-            0
+        let padding = if bytes.ends_with(b"==") {
+            2
         } else {
-            4 - (valid_length % 4)
+            usize::from(bytes.ends_with(b"="))
         };
+        let data_length = bytes.len() - padding;
 
-        let output_length = (valid_length + placeholder_length) * 3 / 4 - placeholder_length;
-        let mut out = vec![0u8; output_length];
+        if bytes[..data_length].contains(&b'=') {
+            return Err(Base64Error::InvalidChar);
+        }
 
-        let mut byte_index = 0usize;
-        let end = if placeholder_length > 0 {
-            valid_length - 4
-        } else {
-            valid_length
-        };
-        let mut index = 0usize;
+        let mut out = Vec::with_capacity(bytes.len() / 4 * 3 - padding);
+        let read = |byte: u8| -> Result<u8, Base64Error> {
+            let value = lookup[byte as usize];
 
-        let read = |lookup: &[u8; 256], b: u8| -> Result<u8, Base64Error> {
-            let v = lookup[b as usize];
-            if v == INVALID {
+            if value == INVALID {
                 Err(Base64Error::InvalidChar)
             } else {
-                Ok(v)
+                Ok(value)
             }
         };
 
-        while index < end {
-            let c0 = read(&lookup, bytes[index])?;
-            let c1 = read(&lookup, bytes[index + 1])?;
-            let c2 = read(&lookup, bytes[index + 2])?;
-            let c3 = read(&lookup, bytes[index + 3])?;
-            let chunk =
-                ((c0 as u32) << 18) | ((c1 as u32) << 12) | ((c2 as u32) << 6) | (c3 as u32);
-            out[byte_index] = ((chunk >> 16) & 0xFF) as u8;
-            out[byte_index + 1] = ((chunk >> 8) & 0xFF) as u8;
-            out[byte_index + 2] = (chunk & 0xFF) as u8;
-            byte_index += 3;
-            index += 4;
-        }
+        for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+            let last = (index + 1) * 4 == bytes.len();
+            let chunk_padding = if last { padding } else { 0 };
+            let c0 = read(chunk[0])?;
+            let c1 = read(chunk[1])?;
+            let c2 = if chunk_padding < 2 {
+                read(chunk[2])?
+            } else {
+                0
+            };
+            let c3 = if chunk_padding == 0 {
+                read(chunk[3])?
+            } else {
+                0
+            };
+            let decoded =
+                ((c0 as u32) << 18) | ((c1 as u32) << 12) | ((c2 as u32) << 6) | c3 as u32;
 
-        if placeholder_length == 2 {
-            let c0 = read(&lookup, bytes[index])? as u32;
-            let c1 = read(&lookup, bytes[index + 1])? as u32;
-            let chunk = (c0 << 2) | (c1 >> 4);
-            out[byte_index] = (chunk & 0xFF) as u8;
-        } else if placeholder_length == 1 {
-            let c0 = read(&lookup, bytes[index])? as u32;
-            let c1 = read(&lookup, bytes[index + 1])? as u32;
-            let c2 = read(&lookup, bytes[index + 2])? as u32;
-            let chunk = (c0 << 10) | (c1 << 4) | (c2 >> 2);
-            out[byte_index] = ((chunk >> 8) & 0xFF) as u8;
-            out[byte_index + 1] = (chunk & 0xFF) as u8;
+            out.push((decoded >> 16) as u8);
+            if chunk_padding < 2 {
+                out.push((decoded >> 8) as u8);
+            }
+            if chunk_padding == 0 {
+                out.push(decoded as u8);
+            }
         }
 
         Ok(out)
@@ -140,23 +132,45 @@ pub mod base64 {
 }
 
 pub mod stable_stringify {
-    //! Canonical JSON output with recursively sorted object keys.
-    //!
-    //! Port of `typeferry-ts/src/ejson/stable-stringify.ts`.
+    //! JavaScript object ordering for ordinary and canonical JSON output.
 
     use serde_json::{Map, Value};
 
     pub fn sort_value(value: Value) -> Value {
+        order_value(value, true)
+    }
+
+    fn array_index(key: &str) -> Option<u32> {
+        let index = key.parse::<u32>().ok()?;
+
+        (index != u32::MAX && index.to_string() == key).then_some(index)
+    }
+
+    fn order_value(value: Value, canonical: bool) -> Value {
         match value {
-            Value::Array(items) => Value::Array(items.into_iter().map(sort_value).collect()),
+            Value::Array(items) => Value::Array(
+                items
+                    .into_iter()
+                    .map(|item| order_value(item, canonical))
+                    .collect(),
+            ),
             Value::Object(map) => {
-                let mut entries: Vec<(String, Value)> =
-                    map.into_iter().map(|(k, v)| (k, sort_value(v))).collect();
-                entries.sort_by(|a, b| a.0.cmp(&b.0));
-                let mut sorted = Map::new();
-                for (k, v) in entries {
-                    sorted.insert(k, v);
-                }
+                let mut entries: Vec<(String, Value)> = map
+                    .into_iter()
+                    .map(|(key, value)| (key, order_value(value, canonical)))
+                    .collect();
+
+                // JavaScript enumerates array indices numerically even when
+                // canonical insertion requested a different lexical order.
+                entries.sort_by(|a, b| match (array_index(&a.0), array_index(&b.0)) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) if canonical => a.0.encode_utf16().cmp(b.0.encode_utf16()),
+                    (None, None) => std::cmp::Ordering::Equal,
+                });
+
+                let sorted: Map<String, Value> = entries.into_iter().collect();
                 Value::Object(sorted)
             }
             other => other,
@@ -164,8 +178,18 @@ pub mod stable_stringify {
     }
 
     pub fn stringify(value: &Value) -> String {
-        let sorted = sort_value(value.clone());
-        serde_json::to_string(&sorted).expect("canonical JSON serialization is total")
+        serde_json::to_string(&sort_value(value.clone()))
+            .expect("canonical JSON serialization is total")
+    }
+
+    /**
+     * Serialize ordinary JSON using JavaScript property enumeration, preserving
+     * insertion order for non-index keys. Anonymous cache identities use this
+     * form rather than canonical sorting.
+     */
+    pub fn stringify_noncanonical(value: &Value) -> String {
+        serde_json::to_string(&order_value(value.clone(), false))
+            .expect("ordinary JSON serialization is total")
     }
 }
 
@@ -175,7 +199,7 @@ pub mod value;
 
 pub use converters::{Regex, from_json_value, to_json_value};
 pub use presentation::Presentation;
-pub use value::{EjsonValue, InfNaNSign};
+pub use value::{EjsonDate, EjsonValue, InfNaNSign};
 
 #[cfg(test)]
 mod tests;

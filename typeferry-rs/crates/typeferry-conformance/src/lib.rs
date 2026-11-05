@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use chrono::{TimeZone, Utc};
 use futures::FutureExt as _;
 use serde_json::{Map, Value, json};
 use typeferry_ejson::{EjsonValue, InfNaNSign, Regex};
@@ -109,7 +108,7 @@ pub fn rehydrate(node: &Value) -> EjsonValue {
         }
         "date" => {
             let ms = node["millis"].as_i64().unwrap();
-            EjsonValue::Date(Utc.timestamp_millis_opt(ms).unwrap())
+            EjsonValue::Date(typeferry_ejson::EjsonDate::from_millis(ms))
         }
         "binary" => {
             let b64 = node["base64"].as_str().unwrap();

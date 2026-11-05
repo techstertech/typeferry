@@ -5,8 +5,9 @@
 use axum::{
     Router,
     body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode, header},
+    extract::{Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -19,11 +20,66 @@ use typeferry_protocol::{
 };
 use typeferry_runtime::{ClientNode, Server, TypeFerryError};
 
+/**
+ * HTTP origin options. Configure WebSocket admission independently through its
+ * own router options; the default HTTP router remains unrestricted.
+ */
+pub type HttpOptions = typeferry_protocol::OriginPolicy;
+
 /// Build the axum router for the HTTP transport.
 pub fn router(server: Arc<Server>) -> Router {
+    router_with_options(server, HttpOptions::default())
+}
+
+/**
+ * Build the RPC router with origin admission before request-body extraction.
+ * Only this router's protocol endpoint receives the configured policy.
+ */
+pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router {
     Router::new()
-        .route(HTTP_ENDPOINT_PATH, post(handle_rpc))
+        .route(
+            HTTP_ENDPOINT_PATH,
+            post(handle_rpc).options(|| async { StatusCode::NO_CONTENT }),
+        )
+        .route_layer(middleware::from_fn_with_state(options, admit_origin))
         .with_state(server)
+}
+
+async fn admit_origin(
+    State(options): State<HttpOptions>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let origin = request.headers().get(header::ORIGIN).cloned();
+    let admitted = match origin.as_ref() {
+        Some(origin) => origin
+            .to_str()
+            .is_ok_and(|origin| options.allows(Some(origin))),
+        None => options.allows(None),
+    };
+
+    if !admitted {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let mut response = next.run(request).await;
+
+    if let Some(origin) = origin {
+        let headers = response.headers_mut();
+
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("POST, OPTIONS"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("content-type, x-api-key, x-client-id"),
+        );
+        headers.append(header::VARY, HeaderValue::from_static("Origin"));
+    }
+
+    response
 }
 
 async fn handle_rpc(
@@ -94,17 +150,7 @@ async fn handle_rpc(
     // Run the auth callback (if configured). Truthy result flips
     // `authenticated` and becomes the node context — matches TS/Python.
     let auth_result = server.run_auth(node.clone(), ctx_json).await;
-    let is_truthy = matches!(
-        &auth_result,
-        Value::Object(_)
-            | Value::Array(_)
-            | Value::String(_)
-            | Value::Number(_)
-            | Value::Bool(true)
-    );
-    if is_truthy {
-        node.set_authenticated(true);
-    }
+    node.set_authenticated(!auth_result.is_null());
     node.set_context(auth_result);
 
     if method.is_protected && !node.is_authenticated() {
@@ -200,7 +246,7 @@ fn error_response(
 }
 
 fn json_response(body: &Value) -> Response {
-    let text = serde_json::to_string(body).expect("response body serializable");
+    let text = typeferry_ejson::stable_stringify::stringify_noncanonical(body);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")

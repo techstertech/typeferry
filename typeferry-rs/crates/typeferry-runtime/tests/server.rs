@@ -75,3 +75,63 @@ fn clients_index_add_and_delete() {
     server.delete_client(&node);
     assert!(!server.clients.read().unwrap().contains_key(&node.uuid()));
 }
+
+#[tokio::test]
+async fn authentication_normalizes_javascript_falsey_values() {
+    for result in [Value::Null, json!(false), json!(0), json!(-0.0), json!("")] {
+        let server = new_server();
+        let expected = result.clone();
+        server.set_auth(Arc::new(move |_node, _context| {
+            let result = result.clone();
+
+            async move { result }.boxed()
+        }));
+
+        let authenticated = server.run_auth(ClientNode::new(None), json!({})).await;
+
+        assert!(
+            matches!(authenticated, Value::Null | Value::Bool(false)),
+            "accepted falsey authentication result {expected}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn authentication_preserves_javascript_truthy_containers_and_scalars() {
+    for result in [
+        json!({}),
+        json!([]),
+        json!(1),
+        json!(-1),
+        json!("user"),
+        json!(true),
+    ] {
+        let server = new_server();
+        let expected = result.clone();
+        server.set_auth(Arc::new(move |_node, _context| {
+            let result = result.clone();
+
+            async move { result }.boxed()
+        }));
+
+        assert_eq!(
+            server.run_auth(ClientNode::new(None), json!({})).await,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejected_authentication_clears_existing_principal_state() {
+    let server = new_server();
+    let node = ClientNode::new(None);
+    node.set_authenticated(true);
+    node.set_context(json!({"user":{"_id":"previous-user"}}));
+    server.set_auth(Arc::new(|_node, _context| async move { json!(0) }.boxed()));
+
+    server.run_auth(node.clone(), json!({})).await;
+
+    assert!(!node.is_authenticated());
+    assert!(node.context.read().unwrap().is_null());
+    assert!(node.user_id.read().unwrap().is_none());
+}

@@ -1864,6 +1864,7 @@ dependencies = [
  "typeferry-ejson",
  "typeferry-http",
  "typeferry-protocol",
+ "typeferry-redis",
  "typeferry-runtime",
  "typeferry-ws",
  "url",

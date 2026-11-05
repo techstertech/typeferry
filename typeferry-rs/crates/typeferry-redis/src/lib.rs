@@ -42,28 +42,11 @@ impl RedisTransport {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
-                let Ok(decoded) = serde_json::from_str::<Value>(&payload) else {
+                let Some(decoded) = decode_inbound(&payload) else {
                     continue;
                 };
-                let event = decoded.get("event").and_then(|v| v.as_str()).unwrap_or("");
-                let channel_name = decoded
-                    .get("channel")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(NO_CHANNEL);
-                let message = decoded
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let exclude = decoded
-                    .get("excludeUuid")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
 
-                if event.is_empty() || message.is_empty() {
-                    continue;
-                }
-
-                let exclude_id = exclude.and_then(|uuid| {
+                let exclude_id = decoded.exclude_uuid.and_then(|uuid| {
                     server
                         .clients
                         .read()
@@ -73,8 +56,8 @@ impl RedisTransport {
                 });
 
                 server
-                    .channel(channel_name)
-                    .propagate(event, message, exclude_id)
+                    .channel(&decoded.channel)
+                    .propagate(&decoded.event, &decoded.message, exclude_id)
                     .await;
             }
         });
@@ -99,8 +82,22 @@ impl RedisTransport {
     pub async fn close(&self) {
         if let Some(handle) = self.listener.lock().await.take() {
             handle.abort();
+            let _ = handle.await;
         }
-        *self.publisher.lock().await = None;
+
+        if let Some(mut publisher) = self.publisher.lock().await.take() {
+            let cleanup: Result<(), redis::RedisError> = redis::pipe()
+                .del(format!("typeferry:clients:{}", self.server.uuid))
+                .ignore()
+                .srem("typeferry:servers", &self.server.uuid)
+                .ignore()
+                .query_async(&mut publisher)
+                .await;
+
+            if let Err(error) = cleanup {
+                tracing::warn!(server_uuid = %self.server.uuid, %error, "Redis close cleanup failed");
+            }
+        }
     }
 }
 

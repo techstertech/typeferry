@@ -137,15 +137,9 @@ async fn ws_fixtures_match_rust_runtime() {
                     let window = Duration::from_millis(
                         op.get("within_ms").and_then(|v| v.as_u64()).unwrap_or(100),
                     );
-                    let res = timeout(window, next_text(&mut ws_stream)).await;
-                    if let Ok(text) = res {
-                        panic!(
-                            "{}: unexpected frame within {:?}: {}",
-                            path.display(),
-                            window,
-                            text
-                        );
-                    }
+                    expect_no_server_frame(&mut ws_stream, window)
+                        .await
+                        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
                 }
                 "server_emit" => {
                     let channel = op["channel"].as_str().unwrap().to_string();
@@ -172,6 +166,29 @@ async fn ws_fixtures_match_rust_runtime() {
             }
         }
     }
+}
+
+async fn expect_no_server_frame<
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+>(
+    stream: &mut S,
+    window: Duration,
+) -> Result<(), String> {
+    match timeout(window, next_text(stream)).await {
+        Ok(text) => Err(format!("unexpected frame within {window:?}: {text}")),
+        Err(_) => Ok(()),
+    }
+}
+
+#[tokio::test]
+async fn negative_fixture_assertions_reject_an_unexpected_frame() {
+    let mut stream = futures::stream::iter([Ok(Message::Text("unexpected".into()))]);
+
+    let error = expect_no_server_frame(&mut stream, Duration::from_millis(100))
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("unexpected"));
 }
 
 /// Recursively sort object keys so `assert_eq` is order-insensitive

@@ -3,8 +3,7 @@
 //! `typeferry-py/src/typeferry/ejson/converters.py`.
 
 use crate::base64::{decode as decode_base64, encode as encode_base64};
-use crate::value::{EjsonValue, InfNaNSign};
-use chrono::{TimeZone, Utc};
+use crate::value::{EjsonDate, EjsonValue, InfNaNSign};
 use serde_json::{Map, Number, Value};
 
 /// Wire-faithful regex container (source + flag string).
@@ -69,9 +68,13 @@ pub fn to_json_value(value: &EjsonValue) -> Value {
         }
 
         EjsonValue::Date(dt) => {
-            let millis = dt.timestamp_millis();
             let mut obj = Map::new();
-            obj.insert("$date".to_string(), Value::Number(Number::from(millis)));
+            let millis = dt
+                .timestamp_millis()
+                .map_or(Value::Null, |millis| Value::Number(Number::from(millis)));
+
+            // JSON.stringify turns an invalid Date's NaN timestamp into null.
+            obj.insert("$date".to_string(), millis);
             Value::Object(obj)
         }
 
@@ -142,10 +145,10 @@ fn decode_object(map: &Map<String, Value>) -> EjsonValue {
 }
 
 fn decode_tag(map: &Map<String, Value>) -> Option<EjsonValue> {
-    if let Some(ms) = map.get("$date").and_then(|v| v.as_i64())
+    if let Some(value) = map.get("$date")
         && map.len() == 1
     {
-        return Some(EjsonValue::Date(Utc.timestamp_millis_opt(ms).unwrap()));
+        return Some(EjsonValue::Date(EjsonDate::from_number(date_number(value))));
     }
     if map.len() == 2
         && let (Some(source), Some(flags)) = (map.get("$regexp"), map.get("$flags"))
@@ -190,6 +193,53 @@ fn decode_tag(map: &Map<String, Value>) -> Option<EjsonValue> {
         });
     }
     None
+}
+
+// The TypeScript date converter applies Number(value) before TimeClip. Keep
+// this coercion local; ordinary EJSON numbers retain their own types.
+fn date_number(value: &Value) -> f64 {
+    match value {
+        Value::Null => 0.0,
+        Value::Bool(value) => u8::from(*value) as f64,
+        Value::Number(value) => value.as_f64().unwrap_or(f64::NAN),
+        Value::String(value) => {
+            // Number(string) trims ECMAScript whitespace, which includes BOM
+            // and excludes NEXT LINE; Rust's Unicode trim uses a different set.
+            let value = value.trim_matches(|character| {
+                matches!(character,
+                    '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+                    '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+                    '\u{205f}' | '\u{3000}' | '\u{feff}'
+                )
+            });
+
+            if value.is_empty() {
+                return 0.0;
+            }
+
+            for (prefix, radix) in [
+                ("0x", 16),
+                ("0X", 16),
+                ("0b", 2),
+                ("0B", 2),
+                ("0o", 8),
+                ("0O", 8),
+            ] {
+                if let Some(digits) = value.strip_prefix(prefix) {
+                    return u64::from_str_radix(digits, radix)
+                        .map_or(f64::NAN, |number| number as f64);
+                }
+            }
+
+            value.parse().unwrap_or(f64::NAN)
+        }
+        Value::Array(items) => match items.as_slice() {
+            [] | [Value::Null] => 0.0,
+            [item @ (Value::Number(_) | Value::String(_) | Value::Array(_))] => date_number(item),
+            _ => f64::NAN,
+        },
+        Value::Object(_) => f64::NAN,
+    }
 }
 
 fn looks_like_tag_form(map: &crate::value::EjsonMap) -> bool {

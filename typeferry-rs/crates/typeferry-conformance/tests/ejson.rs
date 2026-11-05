@@ -10,7 +10,11 @@ fn ejson_fixtures_encode_to_expected_wire_bytes() {
     for case_path in &cases {
         let fixture = load_json(case_path);
         let value = rehydrate(&fixture["value"]);
-        let actual = Presentation::encode(&value);
+        let actual = if fixture["canonical"].as_bool().unwrap_or(false) {
+            Presentation::encode_canonical(&value)
+        } else {
+            Presentation::encode(&value)
+        };
         let expected = fixture["encoded"].as_str().expect("encoded is a string");
         assert_eq!(actual, expected, "{}: encode mismatch", case_path.display());
     }
@@ -23,7 +27,11 @@ fn ejson_fixtures_decode_then_re_encode_identically() {
         let fixture = load_json(case_path);
         let encoded = fixture["encoded"].as_str().unwrap();
         let decoded = Presentation::decode(encoded).expect("decode succeeds");
-        let re_encoded = Presentation::encode(&decoded);
+        let re_encoded = if fixture["canonical"].as_bool().unwrap_or(false) {
+            Presentation::encode_canonical(&decoded)
+        } else {
+            Presentation::encode(&decoded)
+        };
         assert_eq!(
             re_encoded,
             encoded,

@@ -14,6 +14,56 @@ fn node() -> Arc<ClientNode> {
 }
 
 #[tokio::test]
+async fn anonymous_cache_preserves_non_index_key_insertion_order() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler_calls = calls.clone();
+    let handler = Arc::new(move |_node: Arc<ClientNode>, _params: Value| {
+        let calls = handler_calls.clone();
+
+        async move { Ok(json!(calls.fetch_add(1, Ordering::Relaxed) + 1)) }.boxed()
+    });
+    let method = Method::new(
+        "cached",
+        handler,
+        MethodOptions {
+            cache: true,
+            ..Default::default()
+        },
+    );
+    let first: Value = serde_json::from_str(r#"{"b":2,"a":1}"#).unwrap();
+    let reordered: Value = serde_json::from_str(r#"{"a":1,"b":2}"#).unwrap();
+
+    assert_eq!(method.exec(first.clone(), node()).await.unwrap(), json!(1));
+    assert_eq!(method.exec(reordered, node()).await.unwrap(), json!(2));
+    assert_eq!(method.exec(first, node()).await.unwrap(), json!(1));
+}
+
+#[tokio::test]
+async fn anonymous_cache_normalizes_array_index_order() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler_calls = calls.clone();
+    let handler = Arc::new(move |_node: Arc<ClientNode>, _params: Value| {
+        let calls = handler_calls.clone();
+
+        async move { Ok(json!(calls.fetch_add(1, Ordering::Relaxed) + 1)) }.boxed()
+    });
+    let method = Method::new(
+        "cached",
+        handler,
+        MethodOptions {
+            cache: true,
+            ..Default::default()
+        },
+    );
+
+    for wire in [r#"{"10":10,"2":2,"a":1}"#, r#"{"2":2,"10":10,"a":1}"#] {
+        let params = serde_json::from_str(wire).unwrap();
+
+        assert_eq!(method.exec(params, node()).await.unwrap(), json!(1));
+    }
+}
+
+#[tokio::test]
 async fn basic_handler_invocation() {
     let handler = Arc::new(|_node: Arc<ClientNode>, params: Value| {
         async move {

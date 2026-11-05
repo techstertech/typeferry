@@ -6,6 +6,7 @@
 - fix(go): reject explicitly empty origin headers
 - fix(python): enforce protocol boundaries and complete EJSON parity
 - fix(ruby): align authentication, metadata, and quota semantics
+- fix(rust): enforce protocol boundaries and full EJSON date support
 
 ## 2026-10-28
 

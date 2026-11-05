@@ -67,14 +67,18 @@ impl ClientNode {
         *self.context.write().expect("ClientNode.context poisoned") = resolved.clone();
 
         // Derive user_id from context.user._id if present.
-        if authenticated && let Some(user) = resolved.get("user").and_then(|u| u.as_object()) {
-            let id = user
-                .get("_id")
-                .or_else(|| user.get("id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            *self.user_id.write().expect("ClientNode.user_id poisoned") = id;
-        }
+        let id = if authenticated {
+            resolved.get("user").and_then(|user| {
+                user.get("_id")
+                    .or_else(|| user.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        } else {
+            None
+        };
+
+        *self.user_id.write().expect("ClientNode.user_id poisoned") = id;
     }
 
     pub async fn emit_auth_result(&self, authenticated: bool) {
@@ -88,7 +92,11 @@ impl ClientNode {
             "t": MessageType::Auth.as_str(),
             "authenticated": authenticated,
         });
-        socket.send(payload.to_string()).await;
+        socket
+            .send(typeferry_ejson::stable_stringify::stringify_noncanonical(
+                &payload,
+            ))
+            .await;
     }
 
     pub async fn emit_event(&self, event: &str, channel: Option<&str>, params: Value) {
@@ -105,7 +113,11 @@ impl ClientNode {
             "channel": channel,
             "params": params,
         });
-        socket.send(payload.to_string()).await;
+        socket
+            .send(typeferry_ejson::stable_stringify::stringify_noncanonical(
+                &payload,
+            ))
+            .await;
     }
 
     pub async fn close(&self) {

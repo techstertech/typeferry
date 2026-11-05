@@ -44,6 +44,54 @@ fn build_server() -> Arc<Server> {
 }
 
 #[tokio::test]
+async fn protected_http_calls_follow_javascript_authentication_truthiness() {
+    for result in [
+        Value::Null,
+        json!(false),
+        json!(0),
+        json!(-0.0),
+        json!(""),
+        json!([]),
+        json!({}),
+    ] {
+        let allowed = matches!(result, Value::Array(_) | Value::Object(_));
+        let server = build_server();
+        server.set_auth(Arc::new(move |_node, _context| {
+            let result = result.clone();
+
+            async move { result }.boxed()
+        }));
+        server.add_method(
+            "secret",
+            Arc::new(|_node, _params| async move { Ok(json!("secret")) }.boxed()),
+            MethodOptions {
+                protected: true,
+                ..Default::default()
+            },
+        );
+        let (_, body) = post(server, vec![], r#"{"payload":{"method":"secret"}}"#).await;
+
+        if allowed {
+            assert_eq!(body["result"], "secret");
+        } else {
+            assert_eq!(body["message"], "Method Forbidden");
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_ejson_binary_returns_invalid_request_instead_of_panicking() {
+    let (_, body) = post(
+        build_server(),
+        vec![],
+        r#"{"payload":{"method":"echo","params":{"$binary":"===="}}}"#,
+    )
+    .await;
+
+    assert_eq!(body["message"], "Invalid Request");
+}
+
+#[tokio::test]
 async fn happy_path_returns_result_envelope() {
     let server = build_server();
     let handler = Arc::new(|_n: Arc<ClientNode>, p: Value| {

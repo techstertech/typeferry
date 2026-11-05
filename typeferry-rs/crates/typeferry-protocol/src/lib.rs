@@ -17,6 +17,33 @@ pub const PING_INTERVAL_MS: u64 = 25_000;
 
 pub const REDIS_EVENTS_CHANNEL: &str = "events";
 
+/**
+ * Origin admission shared by the HTTP and WebSocket adapters.
+ *
+ * None leaves admission unrestricted. Some(empty) denies every named origin.
+ * Originless admission is explicit and applies only when the header is absent.
+ * Each transport receives its own policy value.
+ */
+#[derive(Debug, Clone, Default)]
+pub struct OriginPolicy {
+    pub origins: Option<Vec<String>>,
+    pub allow_originless: bool,
+}
+
+impl OriginPolicy {
+    /**
+     * Check a normalized Origin header against this transport's policy.
+     */
+    pub fn allows(&self, origin: Option<&str>) -> bool {
+        match (&self.origins, origin) {
+            (None, _) => true,
+            (Some(_), None) => self.allow_originless,
+            (Some(_), Some("")) => false,
+            (Some(origins), Some(origin)) => origins.iter().any(|allowed| allowed == origin),
+        }
+    }
+}
+
 /// Default methods (PROTOCOL.md §7).
 pub mod methods {
     pub const RPC_LOGIN: &str = "rpc:login";

@@ -78,7 +78,7 @@ impl Event {
             None
         };
         (
-            serde_json::to_string(&payload).expect("event payload serializable"),
+            typeferry_ejson::stable_stringify::stringify_noncanonical(&payload),
             exclude,
         )
     }

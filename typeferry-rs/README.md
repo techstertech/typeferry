@@ -46,9 +46,59 @@ The method macro requires an async handler accepting `Arc<ClientNode>` and `serd
 
 The runtime does not bind a socket on construction. Compose `typeferry::http::router(server.clone())` and `typeferry::ws::router(server.clone())` into the application-owned Axum router, then bind and serve it with the application's Tokio lifecycle. See [`typeferry-conformance-server`](crates/typeferry-conformance-server/src/main.rs) for an executable HTTP/WebSocket assembly.
 
+Use `router_with_options` to restrict protocol endpoints to specific origins:
+
+```rust
+let http = typeferry::http::router_with_options(
+    server.clone(),
+    typeferry::http::HttpOptions {
+        origins: Some(vec!["https://app.example.com".into()]),
+        allow_originless: false,
+    },
+);
+let ws = typeferry::ws::router_with_options(
+    server.clone(),
+    typeferry::ws::WebSocketOptions {
+        origins: Some(vec!["https://app.example.com".into()]),
+        allow_originless: true,
+    },
+);
+```
+
+`origins: None` permits every origin. `Some(vec![])` denies every named origin.
+Configured lists reject absent headers unless that transport explicitly sets
+`allow_originless: true`. The HTTP and WebSocket options remain independent.
+HTTP admission precedes body extraction and authentication. Unrelated application
+routes keep their own policy. HTTP preflight responses reflect admitted origins.
+Rate limiting remains application-owned; these options configure origin admission.
+
 Enable `auth` for JWT, cookie, session, device, and OAuth helpers. Authentication establishes a principal; protected handlers must still authorize tenant, role, and resource access. Reject invalid or expired credentials, restrict origins, and keep secrets out of URLs, logs, and compiled configuration.
 
 Use the Redis feature when events must propagate between server instances. Keep application durability in a database or service of record rather than event payloads.
+
+## EJSON dates and ordering
+
+`EjsonValue::Date` now contains `EjsonDate`, rather than `chrono::DateTime<Utc>`.
+Migrate an existing constructor from `EjsonValue::Date(date_time)` to
+`EjsonValue::Date(date_time.into())`. Match arms now receive an `EjsonDate`.
+
+`EjsonDate::from_millis` preserves the complete JavaScript range, including
+`-8640000000000000` and `8640000000000000`. Its `timestamp_millis()` returns
+`Some(milliseconds)` for valid dates and `None` for invalid dates. Out-of-range
+inputs produce an invalid date, not an epoch fallback.
+
+Use `EjsonDate::to_chrono()` for checked conversion. It returns `None` for an
+invalid date or a valid JavaScript date outside chrono's smaller range.
+`EjsonDate::from(date_time)` converts an existing UTC chrono value.
+
+Invalid dates encode as `{"$date":null}`, matching TypeScript. Decoding that
+representation produces epoch zero because the existing TypeScript converter
+applies `Number(null)`. This asymmetry preserves the existing wire behavior.
+
+`Presentation::encode` uses JavaScript property enumeration: array-index keys
+appear first in numeric order, followed by other keys in insertion order.
+`Presentation::encode_canonical` sorts the other keys by UTF-16 code units.
+Both forms apply recursively. Anonymous method caches use ordinary ordering.
 
 ## Workspace crates
 
@@ -71,6 +121,17 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
+
+The Redis lifecycle test is explicitly ignored without a disposable service.
+With Docker running, execute it against a newly owned container:
+
+```sh
+env -u REDIS_URL ../scripts/run-with-redis.sh \
+  cargo test -p typeferry-redis --test lifecycle -- --ignored
+```
+
+The wrapper removes its container after success or failure. The test verifies
+cleanup of the current server's keys while preserving other server state.
 
 ## Boundaries and references
 

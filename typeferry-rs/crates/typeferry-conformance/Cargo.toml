@@ -19,6 +19,7 @@ futures = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+typeferry-redis = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"

@@ -98,9 +98,11 @@ impl Server {
             .expect("is_auth_enabled poisoned") = true;
     }
 
-    /// Invoke the registered auth callback, if any. Returns the auth
-    /// result (truthy dict on success, null/false on failure). Returns
-    /// `Value::Null` when no auth function is installed.
+    /**
+     * Invoke the registered callback using JavaScript authentication truthiness.
+     * Rejection clears the node's principal and returns Null. Truthy containers
+     * and scalars remain intact for the transport to attach as context.
+     */
     pub async fn run_auth(&self, node: Arc<ClientNode>, context: Value) -> Value {
         let fn_opt = self
             .auth_fn
@@ -108,9 +110,27 @@ impl Server {
             .expect("auth_fn poisoned")
             .as_ref()
             .cloned();
-        match fn_opt {
-            Some(auth) => auth(node, context).await,
+        let result = match fn_opt {
+            Some(auth) => auth(node.clone(), context).await,
             None => Value::Null,
+        };
+        let truthy = match &result {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+            Value::String(value) => !value.is_empty(),
+            Value::Array(_) | Value::Object(_) => true,
+        };
+
+        if truthy {
+            result
+        } else {
+            // Both transports consume this result. Normalize JS falsey scalars
+            // here so neither adapter can mistake zero or an empty string for
+            // an authenticated principal.
+            node.set_authenticated(false);
+            node.set_context(Value::Null);
+            Value::Null
         }
     }
 

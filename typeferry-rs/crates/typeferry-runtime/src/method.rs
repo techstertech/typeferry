@@ -91,7 +91,7 @@ impl Method {
         if !node.is_authenticated()
             && let Some(cache) = &self.cache
         {
-            let key = stable_stringify::stringify(&clean);
+            let key = stable_stringify::stringify_noncanonical(&clean);
             if let Some(hit) = cache_get(cache, &key) {
                 return Ok(hit);
             }
