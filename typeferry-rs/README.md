@@ -69,7 +69,8 @@ let ws = typeferry::ws::router_with_options(
 Configured lists reject absent headers unless that transport explicitly sets
 `allow_originless: true`. The HTTP and WebSocket options remain independent.
 HTTP admission precedes body extraction and authentication. Unrelated application
-routes keep their own policy. HTTP preflight responses reflect admitted origins.
+routes keep their own policy. Configured HTTP allowlists emit credentialed CORS
+headers and handle preflight requests. Omitted allowlists add neither behavior.
 Rate limiting remains application-owned; these options configure origin admission.
 
 Enable `auth` for JWT, cookie, session, device, and OAuth helpers. Authentication establishes a principal; protected handlers must still authorize tenant, role, and resource access. Reject invalid or expired credentials, restrict origins, and keep secrets out of URLs, logs, and compiled configuration.

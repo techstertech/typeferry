@@ -36,11 +36,14 @@ pub fn router(server: Arc<Server>) -> Router {
  * Only this router's protocol endpoint receives the configured policy.
  */
 pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router {
+    let mut endpoint = post(handle_rpc);
+
+    if options.origins.is_some() {
+        endpoint = endpoint.options(|| async { StatusCode::NO_CONTENT });
+    }
+
     Router::new()
-        .route(
-            HTTP_ENDPOINT_PATH,
-            post(handle_rpc).options(|| async { StatusCode::NO_CONTENT }),
-        )
+        .route(HTTP_ENDPOINT_PATH, endpoint)
         .route_layer(middleware::from_fn_with_state(options, admit_origin))
         .with_state(server)
 }
@@ -64,10 +67,16 @@ async fn admit_origin(
 
     let mut response = next.run(request).await;
 
-    if let Some(origin) = origin {
+    if options.origins.is_some()
+        && let Some(origin) = origin
+    {
         let headers = response.headers_mut();
 
         headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
             HeaderValue::from_static("POST, OPTIONS"),

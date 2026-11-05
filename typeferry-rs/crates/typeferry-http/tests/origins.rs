@@ -8,8 +8,60 @@ use axum::http::{Request, StatusCode, header};
 use futures::FutureExt;
 use serde_json::json;
 use tower::ServiceExt;
-use typeferry_http::{HttpOptions, router_with_options};
+use typeferry_http::{HttpOptions, router, router_with_options};
 use typeferry_runtime::{MethodOptions, Server, ServerOptions};
+
+#[tokio::test]
+async fn default_router_remains_unrestricted_without_automatic_cors_headers() {
+    let app = router(Server::new(ServerOptions::default()));
+    let response = app
+        .oneshot(
+            Request::post("/__h")
+                .header(header::ORIGIN, "https://other.test")
+                .body(Body::from(r#"{"payload":{"method":"absent"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    for name in [
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        header::VARY,
+    ] {
+        assert!(
+            !response.headers().contains_key(&name),
+            "default router added {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn default_router_does_not_add_automatic_preflight_handling() {
+    let app = router(Server::new(ServerOptions::default()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/__h")
+                .header(header::ORIGIN, "https://other.test")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        !response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+    );
+}
 
 #[tokio::test]
 async fn origin_policies_admit_only_the_selected_requests() {
@@ -59,6 +111,7 @@ async fn origin_policies_admit_only_the_selected_requests() {
             }),
             MethodOptions::default(),
         );
+        let configured = origins.is_some();
         let options = HttpOptions {
             origins,
             allow_originless,
@@ -88,10 +141,28 @@ async fn origin_policies_admit_only_the_selected_requests() {
             }
         );
         assert_eq!(calls.load(Ordering::Relaxed), if admitted { 2 } else { 0 });
-        if admitted && let Some(origin) = origin {
+        if admitted
+            && configured
+            && let Some(origin) = origin
+        {
             assert_eq!(
                 response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
                 origin
+            );
+            assert_eq!(
+                response.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS],
+                "true"
+            );
+        } else {
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            );
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
             );
         }
     }
@@ -156,6 +227,10 @@ async fn admitted_preflight_returns_cors_headers_without_running_authentication(
         .unwrap();
 
     assert!(response.status().is_success());
+    assert_eq!(
+        response.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS],
+        "true"
+    );
     assert_eq!(
         response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
         "https://allowed.test"
