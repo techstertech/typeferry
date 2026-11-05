@@ -21,6 +21,13 @@ Use this runbook for any change visible across HTTP, WebSocket, Redis, EJSON, au
 
 ## Focused fixture commands
 
+From the repository root, run `just verify-shared-fixtures` to replay the shared
+contract across all five backends. Install the pinned Node/npm/Ruby tools,
+Python `.[dev,all]` dependencies in `typeferry-py/.venv`, the Ruby bundle, and
+Rust/Go toolchains first. The recipe stops on any failed command. It does not
+replace full package suites, live Redis lifecycle checks, cross-language client
+tests, or a review of requirements missing from fixtures.
+
 From `typeferry-ts/`:
 
 ```sh

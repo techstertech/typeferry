@@ -191,8 +191,8 @@ success/error responses, void responses, and HTTP 429. `Remaining` is the
 nonnegative remaining quota. `Reset` is the nonnegative relative number of
 seconds until the current limiter window resets, rounded up. Requests rejected
 before rate admission do not consume quota. Disabled limiters emit no quota
-headers. Header names are case-insensitive; legacy `X-RateLimit-*` headers are
-not required. Existing response cookies MUST be preserved.
+headers. Header names are case-insensitive; the TypeFerry limiter MUST NOT emit
+legacy `X-RateLimit-*` headers. Existing response cookies MUST be preserved.
 
 Source: `typeferry-ts/src/server/transports/hono-rate-limit.ts`.
 
@@ -1108,15 +1108,18 @@ following MUST be covered:
 - `redis/*` — published payload shape, originator-exclusion
   propagation, key-lifecycle on server registration and close.
 
-A new implementation is conformant iff every fixture passes against it
-using only the public JS client or raw HTTP/WS bytes.
+An implementation MUST pass every applicable fixture using the public JS client
+or raw HTTP/WS bytes. Passing fixtures does not waive uncovered requirements;
+protocol conformance also requires every applicable MUST in sections 2–10.
 
 ---
 
 ## 14. Versioning
 
-This document is revision **2**. The TS implementation is the source of
-truth; spec revisions follow source changes. Any change to:
+This document is revision **2**. Implementations and fixtures MUST follow this
+normative contract. Correcting an implementation to match an existing requirement
+or clarifying unchanged TypeScript bytes does not create a new revision. Any
+contract change to:
 
 - wire envelope shapes
 - enum string values

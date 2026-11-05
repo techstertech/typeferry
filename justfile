@@ -18,6 +18,15 @@ audit-npm-dependencies:
     cd {{ package_dir }} && mise exec -- node "$(mise which npm)" audit --audit-level=low
     cd template && mise exec -- node "$(mise which npm)" audit --audit-level=low
 
+# Replay shared fixtures across all five backends using their native consumers.
+verify-shared-fixtures:
+    cd {{ package_dir }} && mise exec -- node "$(mise which npm)" run test:unit -- src/test/conformance/ejson-fixtures.unit.spec.ts
+    cd {{ package_dir }} && mise exec -- node "$(mise which npm)" run test:integration -- src/test/conformance/http-fixtures.integration.spec.ts src/test/conformance/ws-fixtures.integration.spec.ts
+    cd typeferry-py && .venv/bin/python -m pytest tests/conformance
+    cd typeferry-rs && cargo test --locked -p typeferry-conformance
+    cd typeferry-rb && mise exec -- ruby "$(mise which bundle)" exec "$(mise which ruby)" -S rake test:conformance
+    cd typeferry-go && go test ./ejson ./httptransport ./websocket ./redistransport
+
 # Run the complete non-uploading npm release and artifact gate.
 verify-npm-release: install-npm-toolchain
     test "$(mise exec -- node --version)" = "v24.19.0"

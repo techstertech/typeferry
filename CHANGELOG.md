@@ -10,6 +10,7 @@
 - fix(rust): preserve default HTTP origin behavior
 - fix(typescript): enforce fail-closed protocol boundaries
 - test(release): remove stale version and source assumptions
+- test(protocol): add shared fixture verification gate
 
 ## 2026-10-28
 
