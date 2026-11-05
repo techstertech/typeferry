@@ -5,10 +5,12 @@
 - fix(go): enforce protocol admission and serialization contracts
 - fix(go): reject explicitly empty origin headers
 - fix(python): enforce protocol boundaries and complete EJSON parity
+- fix(python): retire stale principals on authentication changes
 - fix(ruby): align authentication, metadata, and quota semantics
 - fix(rust): enforce protocol boundaries and full EJSON date support
 - fix(rust): preserve default HTTP origin behavior
 - fix(typescript): enforce fail-closed protocol boundaries
+- fix(typescript): separate authentication from user indexing
 - test(release): remove stale version and source assumptions
 - test(protocol): add shared fixture verification gate
 

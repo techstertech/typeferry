@@ -107,6 +107,60 @@ def test_client_user_index_add_and_remove() -> None:
     assert server.get_clients_by_user_id("u1") == frozenset()
 
 
+@pytest.mark.parametrize("context", [None, {}, {"role": "reader"}, {"user": {"name": "No ID"}}])
+def test_replacing_context_without_a_user_retires_the_previous_principal(
+    context: dict[str, Any] | None,
+) -> None:
+    server = _server()
+    node = ClientNode(server)
+    node.authenticated = True
+    node.set_context({"user": {"_id": "previous"}})
+    server.add_client(node)
+
+    node.set_context(context)
+
+    assert node.authenticated
+    assert node.context == (context if context is not None else {})
+    assert node.user_id is None
+    assert node.user is None
+    assert server.get_clients_by_user_id("previous") == frozenset()
+
+
+def test_changing_user_retires_only_the_replaced_node_from_the_old_index() -> None:
+    server = _server()
+    replaced = ClientNode(server)
+    remaining = ClientNode(server)
+    for node in (replaced, remaining):
+        node.authenticated = True
+        node.set_context({"user": {"_id": "previous"}})
+        server.add_client(node)
+
+    replacement_user = {"_id": "next", "name": "Next user"}
+    replaced.set_context({"user": replacement_user})
+
+    assert replaced.user_id == "next"
+    assert replaced.user == replacement_user
+    assert server.get_clients_by_user_id("previous") == frozenset({remaining})
+    assert server.get_clients_by_user_id("next") == frozenset({replaced})
+
+
+def test_deauthentication_retires_context_and_principal_before_replacement() -> None:
+    server = _server()
+    node = ClientNode(server)
+    node.authenticated = True
+    node.set_context({"user": {"_id": "previous"}})
+    server.add_client(node)
+
+    node.authenticated = False
+    node.set_context({"user": {"_id": "next"}})
+
+    assert node.context == {}
+    assert node.user_id is None
+    assert node.user is None
+    assert server.get_clients_by_user_id("previous") == frozenset()
+    assert server.get_clients_by_user_id("next") == frozenset()
+
+
 @pytest.mark.asyncio
 async def test_disconnect_user_closes_all_sockets() -> None:
     server = _server()
@@ -194,3 +248,5 @@ async def test_rpc_logout_clears_auth_state() -> None:
     assert node.authenticated is False
     assert node.user_id is None
     assert node.context == {}
+    assert node.user is None
+    assert server.get_clients_by_user_id("u1") == frozenset()

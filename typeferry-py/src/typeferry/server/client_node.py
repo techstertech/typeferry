@@ -77,6 +77,8 @@ class ClientNode:
     @authenticated.setter
     def authenticated(self, value: bool) -> None:
         self.is_authenticated = value
+        if not value:
+            self.set_context(None)
 
     def set_id(self, uuid: str) -> None:
         self.uuid = uuid
@@ -93,6 +95,12 @@ class ClientNode:
         self._refresh_user_id()
 
     def _refresh_user_id(self) -> None:
+        # The index owner reads user_id, so retire the old membership before
+        # clearing or replacing principal fields.
+        self.server._remove_client_from_user_index(self)
+        self.user_id = None
+        self.user = None
+
         if not self.authenticated:
             return
         user = None
