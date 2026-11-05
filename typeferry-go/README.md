@@ -28,8 +28,27 @@ payload := ejson.Object(ejson.Field{Key: "message", Value: ejson.String("hello")
 encoded, err := codec.Stringify(payload, false)
 ```
 
-Object field order is retained in ordinary encoding. Pass `true` to
-`Stringify` when the protocol explicitly requests canonical sorted keys.
+Object encoding follows JavaScript property order: array-index keys come first
+in numeric order, followed by other keys in insertion order. Pass `true` to
+`Stringify` to sort non-index keys by UTF-16 code units. The rule applies
+recursively; method-cache keys use ordinary encoding.
+
+Both HTTP and WebSocket `Options.Origins` allow any origin when nil. A non-nil
+empty slice denies every named origin. Configured allowlists reject missing
+origins unless that handler sets `AllowOriginless: true`. The HTTP and WebSocket
+flags are independent, and neither flag admits a mismatching named origin.
+Origin rejection precedes authentication, body decoding, and quota consumption.
+Enabled HTTP limiters attach `RateLimit-Limit`, `RateLimit-Remaining`, and
+`RateLimit-Reset` to every admitted response. Reset rounds the remaining window
+up to whole seconds; disabled limiters omit those headers.
+
+Authentication follows JavaScript truthiness. Null, false, numeric zero, NaN,
+and empty strings reject authentication; empty objects and arrays accept it.
+WebSocket metadata is a JSON object, not EJSON: tag-shaped objects stay literal.
+The raw metadata input must fit within 10,000 UTF-8 bytes. Invalid metadata
+becomes an empty object. Invalid client UUIDs receive fresh identifiers rather
+than reusing a sanitized fragment.
+
 Custom types must be registered on a `Codec` before parsing their tag.
 `Value.NumberText()` retains the spelling of parsed finite numbers for
 application coercion, including integer literals larger than `int64`.

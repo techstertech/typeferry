@@ -16,7 +16,9 @@ import (
 const PingInterval = 25 * time.Second
 
 type Options struct {
-	Origins         []string
+	// Origins is unrestricted when nil; a non-nil empty slice denies named origins.
+	Origins []string
+	// AllowOriginless admits missing Origin headers only for this WebSocket handler.
 	AllowOriginless bool
 	Authenticate    HandshakeAuthenticator
 	MaxMessageBytes int64
@@ -37,7 +39,10 @@ type Handler struct {
 }
 
 func New(server *runtime.Server, options Options) *Handler {
-	origins := make(map[string]struct{}, len(options.Origins))
+	var origins map[string]struct{}
+	if options.Origins != nil {
+		origins = make(map[string]struct{}, len(options.Origins))
+	}
 	for _, origin := range options.Origins {
 		origins[origin] = struct{}{}
 	}
@@ -55,9 +60,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	origin := request.Header.Get("Origin")
-	if len(handler.origins) > 0 {
+	if handler.origins != nil {
 		_, allowed := handler.origins[origin]
-		if !allowed && !(origin == "" && handler.options.AllowOriginless) {
+		if origin == "" {
+			allowed = handler.options.AllowOriginless
+		}
+		if !allowed {
 			http.Error(response, "Forbidden", http.StatusForbidden)
 			return
 		}

@@ -12,21 +12,29 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
 	"github.com/leonardoventurini/typeferry/typeferry-go/runtime"
 )
 
 type fixtureSocket struct {
-	mu     sync.Mutex
-	sent   []string
-	closed bool
+	mu      sync.Mutex
+	sent    []string
+	closed  bool
+	changed chan struct{}
 }
 
 func (socket *fixtureSocket) SendText(_ context.Context, message string) error {
 	socket.mu.Lock()
 	defer socket.mu.Unlock()
 	socket.sent = append(socket.sent, message)
+	if socket.changed != nil {
+		select {
+		case socket.changed <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -59,13 +67,14 @@ func (socket *fixtureSocket) empty() bool {
 }
 
 type operation struct {
-	Op      string            `json:"op"`
-	Query   map[string]string `json:"query"`
-	Frame   map[string]any    `json:"frame"`
-	Event   string            `json:"event"`
-	Channel string            `json:"channel"`
-	Params  any               `json:"params"`
-	Methods []struct {
+	Op       string            `json:"op"`
+	WithinMS int               `json:"within_ms"`
+	Query    map[string]string `json:"query"`
+	Frame    map[string]any    `json:"frame"`
+	Event    string            `json:"event"`
+	Channel  string            `json:"channel"`
+	Params   any               `json:"params"`
+	Methods  []struct {
 		Name      string `json:"name"`
 		Handler   string `json:"handler"`
 		Protected bool   `json:"protected"`
@@ -180,7 +189,7 @@ func TestSharedWebSocketFixtures(t *testing.T) {
 						t.Fatalf("frame = %#v, want %#v", actual, step.Frame)
 					}
 				case "expect_no_server_frame":
-					if !socket.empty() {
+					if !socket.quietWithin(time.Duration(step.WithinMS) * time.Millisecond) {
 						t.Fatal("unexpected server frame")
 					}
 				case "disconnect":
@@ -193,5 +202,27 @@ func TestSharedWebSocketFixtures(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A negative fixture observes the entire interval, including frames emitted
+// after dispatch returns. Notifications are registered under the buffer lock.
+func (socket *fixtureSocket) quietWithin(within time.Duration) bool {
+	socket.mu.Lock()
+	if len(socket.sent) != 0 {
+		socket.mu.Unlock()
+		return false
+	}
+	changed := make(chan struct{}, 1)
+	socket.changed = changed
+	socket.mu.Unlock()
+
+	timer := time.NewTimer(within)
+	defer timer.Stop()
+	select {
+	case <-changed:
+		return false
+	case <-timer.C:
+		return socket.empty()
 	}
 }

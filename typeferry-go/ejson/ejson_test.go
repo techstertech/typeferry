@@ -25,10 +25,11 @@ type fixtureValue struct {
 }
 
 type fixture struct {
-	Name     string       `json:"name"`
-	Value    fixtureValue `json:"value"`
-	Encoded  string       `json:"encoded"`
-	Register struct {
+	Name      string       `json:"name"`
+	Canonical bool         `json:"canonical"`
+	Value     fixtureValue `json:"value"`
+	Encoded   string       `json:"encoded"`
+	Register  struct {
 		CustomTypes []string `json:"custom_types"`
 	} `json:"register"`
 }
@@ -143,7 +144,7 @@ func TestSharedEJSONFixtures(t *testing.T) {
 				}
 			}
 
-			encoded, err := codec.Stringify(rehydrate(t, example.Value), false)
+			encoded, err := codec.Stringify(rehydrate(t, example.Value), example.Canonical)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +156,7 @@ func TestSharedEJSONFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reencoded, err := codec.Stringify(decoded, false)
+			reencoded, err := codec.Stringify(decoded, example.Canonical)
 			if err != nil {
 				t.Fatal(err)
 			}

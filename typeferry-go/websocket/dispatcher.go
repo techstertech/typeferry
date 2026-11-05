@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
+	authidentity "github.com/leonardoventurini/typeferry/typeferry-go/internal/identity"
 	"github.com/leonardoventurini/typeferry/typeferry-go/protocol"
 	"github.com/leonardoventurini/typeferry/typeferry-go/runtime"
 )
 
 const AuthenticationTimeout = 5 * time.Second
 
-var validID = regexp.MustCompile(`[^a-zA-Z0-9-]`)
+var validID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
 
 type Handshake struct {
 	Path    string
@@ -80,20 +81,12 @@ func (dispatcher *Dispatcher) SetRateLimit(max int, interval time.Duration) {
 
 func NewDispatcher(server *runtime.Server, socket runtime.Socket, query map[string]string, auth HandshakeAuthenticator) *Dispatcher {
 	id := query["uuid"]
-	if len(id) > 64 {
+	if !validID.MatchString(id) {
 		id = ""
-	} else {
-		id = validID.ReplaceAllString(id, "")
 	}
 	client := runtime.NewClient(id)
 	client.SetSocket(socket)
-	meta := ejson.Object()
-	if raw := query["meta"]; len(raw) <= 10000 && raw != "" {
-		if parsed, err := server.Codec().Parse(raw); err == nil && parsed.Kind() == ejson.KindObject {
-			meta = parsed
-		}
-	}
-	client.SetMeta(meta)
+	client.SetMeta(parseMeta(query["meta"]))
 	lifetime, cancel := context.WithCancel(context.Background())
 	return &Dispatcher{server: server, socket: socket, client: client, query: query, auth: auth, authTimeout: AuthenticationTimeout, lifetime: lifetime, cancel: cancel}
 }
@@ -158,10 +151,7 @@ func (dispatcher *Dispatcher) Open(ctx context.Context) error {
 }
 
 func acceptIdentity(client *runtime.Client, identity ejson.Value) {
-	accepted := identity.Kind() != ejson.KindNull
-	if boolean, ok := identity.Boolean(); ok && !boolean {
-		accepted = false
-	}
+	accepted := authidentity.Accepted(identity)
 	client.SetAuthenticated(accepted)
 	if accepted {
 		client.SetContext(identity)

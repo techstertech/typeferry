@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
 )
 
 const validRegexFlags = "gimuy"
@@ -289,7 +290,8 @@ func sanitizeFlags(source string) string {
 }
 
 // Stringify emits TypeFerry's exact wire text. Canonical mode recursively
-// sorts object keys; ordinary mode retains insertion order.
+// sorts non-index keys by UTF-16 units; ordinary mode retains their insertion
+// order. Both modes emit JavaScript array-index keys numerically first.
 func (codec *Codec) Stringify(value Value, canonical bool) (string, error) {
 	var output bytes.Buffer
 	if err := writeValue(&output, value, canonical, false); err != nil {
@@ -343,10 +345,7 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 			output.WriteByte('}')
 			return nil
 		}
-		fields := slices.Clone(value.fields)
-		if canonical {
-			sort.Slice(fields, func(i, j int) bool { return fields[i].Key < fields[j].Key })
-		}
+		fields := orderedFields(value.fields, canonical)
 		output.WriteByte('{')
 		for index, field := range fields {
 			if index > 0 {
@@ -395,4 +394,32 @@ func writeString(output *bytes.Buffer, value string) error {
 	}
 	output.Truncate(output.Len() - 1)
 	return nil
+}
+
+// JavaScript always enumerates array-index properties before other string
+// properties. Canonical mode only changes the order of the remaining keys.
+func orderedFields(source []Field, canonical bool) []Field {
+	fields := slices.Clone(source)
+	sort.SliceStable(fields, func(i, j int) bool {
+		left, leftIndex := arrayIndex(fields[i].Key)
+		right, rightIndex := arrayIndex(fields[j].Key)
+		if leftIndex != rightIndex {
+			return leftIndex
+		}
+		if leftIndex {
+			return left < right
+		}
+		if canonical {
+			return slices.Compare(utf16.Encode([]rune(fields[i].Key)), utf16.Encode([]rune(fields[j].Key))) < 0
+		}
+		return false
+	})
+	return fields
+}
+
+func arrayIndex(key string) (uint64, bool) {
+	const reservedIndex = uint64(1<<32 - 1)
+
+	index, err := strconv.ParseUint(key, 10, 32)
+	return index, err == nil && index < reservedIndex && strconv.FormatUint(index, 10) == key
 }

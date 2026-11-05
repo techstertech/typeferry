@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-04
+
+- fix(go): enforce protocol admission and serialization contracts
+
 ## 2026-10-28
 
 - fix(auth): preserve token age and serialize browser refresh recovery

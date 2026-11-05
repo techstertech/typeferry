@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
+	authidentity "github.com/leonardoventurini/typeferry/typeferry-go/internal/identity"
 	"github.com/leonardoventurini/typeferry/typeferry-go/protocol"
 )
 
@@ -322,10 +323,7 @@ func (server *Server) Authenticate(ctx context.Context, client *Client, input ej
 		client.SetContext(ejson.Null())
 		return err
 	}
-	authenticated := identity.Kind() != ejson.KindNull
-	if boolean, ok := identity.Boolean(); ok && !boolean {
-		authenticated = false
-	}
+	authenticated := authidentity.Accepted(identity)
 	client.SetAuthenticated(authenticated)
 	if authenticated {
 		client.SetContext(identity)

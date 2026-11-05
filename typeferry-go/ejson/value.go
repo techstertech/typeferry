@@ -24,8 +24,8 @@ const (
 	KindCustom
 )
 
-// Field preserves object insertion order, which TypeFerry uses for ordinary
-// EJSON encoding and method-cache keys.
+// Field preserves insertion order for non-index object keys. Wire encoding
+// emits JavaScript array-index keys first, independent of insertion order.
 type Field struct {
 	Key   string
 	Value Value

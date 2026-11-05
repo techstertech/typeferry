@@ -24,7 +24,9 @@ const (
 )
 
 type Options struct {
-	Origins          []string
+	// Origins is unrestricted when nil; a non-nil empty slice denies named origins.
+	Origins []string
+	// AllowOriginless admits missing Origin headers only for this HTTP handler.
 	AllowOriginless  bool
 	MaxBodyBytes     int64
 	DisableRateLimit bool
@@ -57,7 +59,7 @@ func (limit *limiter) consume(key string) (bool, int, time.Duration) {
 	}
 	kept = append(kept, now)
 	limit.entries[key] = kept
-	return true, limit.max - len(kept), limit.window
+	return true, limit.max - len(kept), limit.window - now.Sub(kept[0])
 }
 
 // Handler applies transport-level origin, size, and rate policy before calling
@@ -79,7 +81,10 @@ func New(server *runtime.Server, options Options) *Handler {
 	if options.RateLimitWindow <= 0 {
 		options.RateLimitWindow = defaultRateWindow
 	}
-	origins := make(map[string]struct{}, len(options.Origins))
+	var origins map[string]struct{}
+	if options.Origins != nil {
+		origins = make(map[string]struct{}, len(options.Origins))
+	}
 	for _, origin := range options.Origins {
 		origins[origin] = struct{}{}
 	}
@@ -106,10 +111,14 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	address := handler.clientAddress(request)
 	if handler.limit != nil {
 		allowed, remaining, reset := handler.limit.consume(address)
+		response.Header().Set("RateLimit-Limit", intString(handler.limit.max))
+		response.Header().Set("RateLimit-Remaining", intString(remaining))
+		resetSeconds := reset / time.Second
+		if reset%time.Second > 0 {
+			resetSeconds++
+		}
+		response.Header().Set("RateLimit-Reset", intString(int(resetSeconds)))
 		if !allowed {
-			response.Header().Set("RateLimit-Limit", intString(handler.limit.max))
-			response.Header().Set("RateLimit-Remaining", intString(remaining))
-			response.Header().Set("RateLimit-Reset", intString(int(reset/time.Second)))
 			response.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -131,7 +140,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 }
 
 func (handler *Handler) originAllowed(origin string) bool {
-	if len(handler.origins) == 0 {
+	if handler.origins == nil {
 		return true
 	}
 	if origin == "" {
