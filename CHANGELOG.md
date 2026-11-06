@@ -5,6 +5,7 @@
 - security(auth): generate independent cryptographic session credentials
 - security(python): use peer identity and expire inactive quota buckets
 - security(python): bound HTTP request bodies before decoding
+- security(typescript): use connection peers for quotas and request metadata
 
 ## 2026-11-04
 

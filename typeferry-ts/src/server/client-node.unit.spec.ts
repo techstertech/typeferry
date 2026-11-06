@@ -259,11 +259,22 @@ describe('ClientNode', () => {
       })
 
       expect(node.userAgent).toBe('TestBot/1.0')
-      expect(node.remoteAddress).toBe('10.0.0.1')
+      expect(node.remoteAddress).toBe('127.0.0.1')
       expect(node.headers['content-type']).toBe('application/json')
     })
 
-    it('falls back to socket.remoteAddress when no x-forwarded-for', () => {
+    it('uses an adapter-provided peer without promoting forwarding headers', () => {
+      const node = new ClientNode(server)
+
+      node.setTrackingProperties({
+        headers: { 'x-forwarded-for': '203.0.113.1' },
+        ip: '192.0.2.1',
+      })
+
+      expect(node.remoteAddress).toBe('192.0.2.1')
+    })
+
+    it('uses socket.remoteAddress when an adapter IP is absent', () => {
       const node = new ClientNode(server)
 
       node.setTrackingProperties({

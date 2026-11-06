@@ -14,7 +14,7 @@ describe('parseDeviceInfo', () => {
 
   it('returns ip only when no user-agent header is present', () => {
     const req = {
-      headers: { 'x-forwarded-for': '10.0.0.1' },
+      socket: { remoteAddress: '10.0.0.1' },
     }
     const result = parseDeviceInfo(req)
     expect(result).toEqual({ ip: '10.0.0.1' })
@@ -29,8 +29,8 @@ describe('parseDeviceInfo', () => {
       headers: {
         'user-agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'x-forwarded-for': '1.2.3.4',
       },
+      ip: '1.2.3.4',
     }
     const result = parseDeviceInfo(req)
     expect(result.ip).toBe('1.2.3.4')
@@ -90,7 +90,7 @@ describe('parseDeviceInfo', () => {
   })
 
   describe('IP extraction priority', () => {
-    it('prefers x-forwarded-for header over socket and ip', () => {
+    it('uses the direct socket peer instead of a forwarding header', () => {
       const req = {
         headers: {
           'x-forwarded-for': '203.0.113.1',
@@ -100,10 +100,10 @@ describe('parseDeviceInfo', () => {
         ip: '192.168.1.1',
       }
       const result = parseDeviceInfo(req)
-      expect(result.ip).toBe('203.0.113.1')
+      expect(result.ip).toBe('10.0.0.1')
     })
 
-    it('falls back to socket.remoteAddress when x-forwarded-for is absent', () => {
+    it('uses the direct socket peer before an adapter-provided IP', () => {
       const req = {
         headers: {
           'user-agent': 'TestBot/1.0',
@@ -115,10 +115,11 @@ describe('parseDeviceInfo', () => {
       expect(result.ip).toBe('10.0.0.1')
     })
 
-    it('falls back to req.ip when both headers and socket are absent', () => {
+    it('uses an adapter-provided IP without promoting a forwarding header', () => {
       const req = {
         headers: {
           'user-agent': 'TestBot/1.0',
+          'x-forwarded-for': '203.0.113.1',
         },
         ip: '192.168.1.1',
       }

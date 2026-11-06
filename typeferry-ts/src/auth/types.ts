@@ -3,7 +3,9 @@
  * Used for session tracking and security monitoring.
  */
 export interface DeviceInfo {
-  /** Client IP address (from x-forwarded-for or socket) */
+  /**
+   * Client IP address supplied by the connection socket or HTTP adapter.
+   */
   ip?: string
   /** Raw user agent string */
   userAgent?: string

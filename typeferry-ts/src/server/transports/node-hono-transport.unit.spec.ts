@@ -6,8 +6,9 @@ import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
 
 import { EJSON } from '../../ejson'
+import { parseDeviceInfo } from '../../auth/server/device-info'
 import type { TypeFerryResponse } from '../request-types'
-import { Server, type RequestBodySizeLimit } from '../server'
+import { Server, type RateLimit, type RequestBodySizeLimit } from '../server'
 import { PublicError, ServerEvents } from '../../utils'
 
 const LOCAL_HOST = '127.0.0.1'
@@ -21,6 +22,7 @@ async function createServer(
     requestBodySizeLimits?: readonly RequestBodySizeLimit[]
     origins?: string[]
     requestListener?: RequestListener
+    rateLimit?: RateLimit
   } = {},
 ): Promise<Server> {
   const server = new Server({
@@ -229,30 +231,53 @@ describe('NodeHonoTransport', () => {
     await server.close()
   })
 
-  it('preserves forwarded remote IP and multiple response cookies', async () => {
-    const server = await createServer()
-    server.addMethod('transport:metadata', function () {
-      const response = this.res as TypeFerryResponse
-      response.setHeader('Set-Cookie', 'first=one; Path=/')
-      response.setHeader('Set-Cookie', 'second=two; Path=/')
-      return this.remoteAddress
+  it('uses the connection peer for metadata and quotas while preserving cookies', async () => {
+    const server = await createServer({
+      rateLimit: { max: 1, interval: 60_000 },
     })
 
-    const response = await fetch(`http://${LOCAL_HOST}:${server.port}/__h`, {
-      body: rpcBody('transport:metadata'),
-      headers: { 'x-forwarded-for': '203.0.113.9' },
-      method: 'POST',
-    })
-    const payload = EJSON.parse(await response.text()) as {
-      result: string
+    try {
+      server.addMethod('transport:metadata', function () {
+        const response = this.res as TypeFerryResponse
+        response.setHeader('Set-Cookie', 'first=one; Path=/')
+        response.setHeader('Set-Cookie', 'second=two; Path=/')
+
+        if (!this.req)
+          throw new Error('HTTP methods must have request metadata')
+
+        return {
+          remoteAddress: this.remoteAddress,
+          requestIp: this.req.ip,
+          deviceIp: parseDeviceInfo(this.req).ip,
+        }
+      })
+
+      const response = await fetch(`http://${LOCAL_HOST}:${server.port}/__h`, {
+        body: rpcBody('transport:metadata'),
+        headers: { 'x-forwarded-for': '203.0.113.9' },
+        method: 'POST',
+      })
+      const payload = EJSON.parse(await response.text()) as {
+        result: { remoteAddress: string; requestIp: string; deviceIp: string }
+      }
+      expect(payload.result.remoteAddress).toBe(LOCAL_HOST)
+      expect(payload.result.requestIp).toBe(LOCAL_HOST)
+      expect(payload.result.deviceIp).toBe(LOCAL_HOST)
+      expect(response.headers.getSetCookie()).toEqual([
+        'first=one; Path=/',
+        'second=two; Path=/',
+      ])
+
+      const repeated = await fetch(`http://${LOCAL_HOST}:${server.port}/__h`, {
+        body: rpcBody('transport:metadata'),
+        headers: { 'x-forwarded-for': '203.0.113.10' },
+        method: 'POST',
+      })
+
+      expect(repeated.status).toBe(429)
+    } finally {
+      await server.close()
     }
-    expect(payload.result).toBe('203.0.113.9')
-    expect(response.headers.getSetCookie()).toEqual([
-      'first=one; Path=/',
-      'second=two; Path=/',
-    ])
-
-    await server.close()
   })
 
   it('tracks the direct peer address when no forwarding header is present', async () => {

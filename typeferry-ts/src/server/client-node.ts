@@ -92,6 +92,7 @@ export class ClientNode extends EventEmitter2 {
   /**
    * Extracts tracking properties (headers, IP, user-agent) from a request.
    * Accepts both Node `IncomingMessage` and the framework-agnostic `TypeFerryRequest`.
+   * Uses the transport peer without promoting untrusted forwarding headers.
    */
   setTrackingProperties(source: {
     headers?: Record<string, string | string[] | undefined>
@@ -105,12 +106,7 @@ export class ClientNode extends EventEmitter2 {
     )
     const userAgent = source.headers?.['user-agent']
     this.userAgent = typeof userAgent === 'string' ? userAgent : ''
-    const forwardedFor = source.headers?.['x-forwarded-for']
-    this.remoteAddress =
-      (typeof forwardedFor === 'string' ? forwardedFor : undefined) ??
-      source.socket?.remoteAddress ??
-      source.ip ??
-      ''
+    this.remoteAddress = source.socket?.remoteAddress ?? source.ip ?? ''
   }
 
   /**

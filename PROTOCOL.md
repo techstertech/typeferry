@@ -189,6 +189,12 @@ requests per window.
 
 Custom: `{ interval: <ms>, max: <count> }`.
 
+The Node and Python HTTP adapters use the host-supplied peer/client address for
+quota identity and request metadata. They do not parse `X-Forwarded-For` as an
+authoritative identity. Trusted proxy rewriting and proxy-specific quota policy
+belong to the host. Without host handling, clients behind one proxy share its
+peer quota.
+
 Sources: `src/server/transports/http-transport.ts:50-57`,
 `src/server/transports/bun-hono-transport.ts:82-88`.
 
@@ -821,6 +827,12 @@ family tracking. Sessions have:
 - `isRevoked?`
 - `replacedBy?` (next token after rotation)
 - `usedAt?` (ms timestamp of last rotation)
+
+Refresh credentials MUST use cryptographically secure randomness. Public session
+identifiers MUST NOT reveal the randomness used by bearer credentials. The Node
+in-memory manager uses independently generated cryptographic UUIDs and retains
+the existing UUID format. Upgrading deployments must discard refresh sessions
+created by its earlier non-secure generator and require a new sign-in.
 
 Source: `src/auth/types.ts:22-41`.
 

@@ -100,7 +100,7 @@ installing the fixed release; this repository task does not access those session
 
 - [x] Repair cryptographic session identifiers.
 - [ ] Restrict template MongoDB publication.
-- [ ] Repair peer identity and Python limiter retention.
+- [x] Repair peer identity and Python limiter retention.
 - [x] Bound Python HTTP request bodies.
 - [ ] Upgrade the Rust JWT dependency.
 - [ ] Enforce Ruby literal process execution.
@@ -110,8 +110,11 @@ installing the fixed release; this repository task does not access those session
 ## Verification results
 
 - A1: the new regression failed against the previous UUID generator, then all
-  42 session-manager tests passed after the fix. Full package verification is
-  pending the remaining TypeScript changes.
+  42 session-manager tests passed after the fix.
+- A2, TypeScript: seven peer-identity regressions failed before implementation.
+  The combined credential/peer focused run passed (120 tests), as did lint and
+  typecheck. Full suites passed: 1,805 unit, 99 integration, and 24 browser tests.
+  Independent source review found no consequential identity or API regression.
 - A2/A3, Python: four new regressions failed before implementation. The focused
   HTTP/limiter tests then passed (40), followed by full pytest (322), Ruff, and
   mypy (53 files). Fifteen existing weak-test-key warnings remain.

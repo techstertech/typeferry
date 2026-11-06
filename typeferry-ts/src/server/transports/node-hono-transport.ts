@@ -322,7 +322,7 @@ export class NodeHonoTransport {
   // ---------------------------------------------------------------------------
 
   private buildTypeFerryRequest(c: Context): TypeFerryRequest {
-    const ip = c.req.header('x-forwarded-for') ?? getConnInfo(c).remote.address
+    const ip = getConnInfo(c).remote.address
 
     return {
       headers: Object.fromEntries(c.req.raw.headers.entries()),

@@ -169,6 +169,11 @@ restart its application instances with the fixed build to discard their in-memor
 refresh sessions. Require users to sign in again. Access-token expiry alone does
 not invalidate an existing refresh token.
 
+HTTP quotas, request tracking, and device IPs use the connection peer. The Node
+adapter does not promote `X-Forwarded-For` to an authenticated client address.
+Clients behind one proxy share its peer quota. Configure client-specific limits
+at the trusted proxy when that deployment needs them.
+
 ## Development
 
 Run commands from `typeferry-ts/`:

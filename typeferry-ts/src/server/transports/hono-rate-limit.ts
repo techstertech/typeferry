@@ -1,3 +1,4 @@
+import { getConnInfo } from '@hono/node-server/conninfo'
 import type { MiddlewareHandler } from 'hono'
 
 interface RateLimitEntry {
@@ -18,11 +19,11 @@ export type DisposableRateLimiter = MiddlewareHandler & {
 }
 
 /**
- * Fixed-window IP rate limiter for Hono.
- * Applies per-client HTTP RPC limits within Hono.
+ * Fixed-window rate limiter keyed by the Node connection peer.
+ * Forwarded client identity remains the host's trust decision.
  */
 export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
-  const store = new Map<string, RateLimitEntry>()
+  const store = new Map<string | undefined, RateLimitEntry>()
 
   const cleanupTimer = setInterval(() => {
     const now = Date.now()
@@ -34,13 +35,13 @@ export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
   cleanupTimer.unref()
 
   const middleware: DisposableRateLimiter = async (c, next) => {
-    const ip = c.req.header('x-forwarded-for') ?? '127.0.0.1'
+    const peerAddress = getConnInfo(c).remote.address
     const now = Date.now()
 
-    let entry = store.get(ip)
+    let entry = store.get(peerAddress)
     if (!entry || entry.resetAt <= now) {
       entry = { count: 0, resetAt: now + opts.windowMs }
-      store.set(ip, entry)
+      store.set(peerAddress, entry)
     }
 
     entry.count++
@@ -49,7 +50,9 @@ export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
     c.header('RateLimit-Remaining', String(Math.max(0, opts.max - entry.count)))
     c.header(
       'RateLimit-Reset',
-      String(Math.ceil(Math.max(0, entry.resetAt - now) / MILLISECONDS_PER_SECOND)),
+      String(
+        Math.ceil(Math.max(0, entry.resetAt - now) / MILLISECONDS_PER_SECOND),
+      ),
     )
 
     if (entry.count > opts.max) {
