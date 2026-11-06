@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
+require "json"
 require "rbconfig"
+require "shellwords"
 require "tempfile"
 require "timeout"
+require "tmpdir"
 require "typeferry/process_supervisor"
 require_relative "../test_helper"
 
@@ -24,6 +27,47 @@ class ProcessSupervisorTest < Minitest::Test
     assert_equal 0, result.exit_status
     assert result.success?
     refute @supervisor.active?("success")
+  end
+
+  def test_singleton_command_uses_the_literal_executable_path
+    with_literal_executable do |executable, _directory, receipt|
+      job = @supervisor.start(id: "literal-path", command: [executable],
+        environment: {"TYPEFERRY_TEST_RECEIPT" => receipt})
+
+      assert job.wait(timeout: 2).success?
+      assert_equal [], JSON.parse(File.read(receipt)).fetch("arguments")
+    end
+  end
+
+  def test_singleton_command_cannot_run_shell_syntax
+    Dir.mktmpdir("typeferry-shell-syntax") do |directory|
+      marker = File.join(directory, "unexpected")
+      shell_command = [RbConfig.ruby, "-e", "File.write(ARGV.fetch(0), 'shell')", marker].shelljoin
+
+      job = @supervisor.start(id: "shell-syntax", command: [shell_command])
+      result = job.wait(timeout: 2)
+
+      assert_equal :spawn_failed, result.status
+      assert_instance_of Errno::ENOENT, result.error
+      refute File.exist?(marker)
+    end
+  end
+
+  def test_arguments_environment_and_directory_remain_literal
+    with_literal_executable do |executable, directory, receipt|
+      arguments = ["space argument", "semi;colon", "$(printf injected)", "*"]
+      job = @supervisor.start(id: "literal-arguments", command: [executable, *arguments],
+        environment: {"TYPEFERRY_TEST_RECEIPT" => receipt, "TYPEFERRY_TEST_VALUE" => "literal value"},
+        directory: directory, unset_environment: true)
+
+      assert job.wait(timeout: 2).success?
+
+      observed = JSON.parse(File.read(receipt))
+
+      assert_equal arguments, observed.fetch("arguments")
+      assert_equal "literal value", observed.fetch("environment")
+      assert_equal File.realpath(directory), observed.fetch("directory")
+    end
   end
 
   def test_cancel_is_idempotent_and_terminates_the_process
@@ -84,6 +128,27 @@ class ProcessSupervisorTest < Minitest::Test
   end
 
   private
+
+  def with_literal_executable
+    Dir.mktmpdir("typeferry process ") do |directory|
+      executable = File.join(directory, "literal ; process")
+      receipt = File.join(directory, "receipt.json")
+
+      File.write(executable, <<~RUBY)
+        #!#{RbConfig.ruby}
+        require "json"
+
+        File.write(ENV.fetch("TYPEFERRY_TEST_RECEIPT"), JSON.generate({
+          arguments: ARGV,
+          environment: ENV["TYPEFERRY_TEST_VALUE"],
+          directory: Dir.pwd
+        }))
+      RUBY
+      File.chmod(0o700, executable)
+
+      yield executable, directory, receipt
+    end
+  end
 
   def wait_for_pid(path)
     Timeout.timeout(2) do

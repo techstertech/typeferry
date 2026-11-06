@@ -46,7 +46,11 @@ module TypeFerry
       # @type var options: Hash[Symbol, untyped]
       options = {pgroup: true, in: @stdin, out: @stdout, err: @stderr, unsetenv_others: @unset_environment}
       options[:chdir] = @directory if @directory
-      @pid = Kernel.spawn(@environment, *@command, **options)
+      executable = @command.fetch(0)
+
+      # The executable/argv0 pair prevents Ruby from interpreting singleton
+      # commands as shell syntax while preserving literal executable paths.
+      @pid = Kernel.spawn(@environment, [executable, executable], *@command.drop(1), **options)
       @started_at = monotonic_now
       @thread = Thread.new { monitor_process }
       @thread.report_on_exception = false

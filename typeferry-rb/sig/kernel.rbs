@@ -1,0 +1,6 @@
+module Kernel
+  # RBS 3.10 omits Ruby's executable/argv0 form. Add its precise overload
+  # without weakening the core string-command signatures.
+  def self.spawn: (Hash[string, string?] environment, [String, String] executable, *String arguments, ?unsetenv_others: boolish, ?pgroup: true | Integer, ?umask: Integer, ?in: redirect_fd, ?out: redirect_fd, ?err: redirect_fd, ?close_others: boolish, ?chdir: String) -> Integer
+                | ...
+end

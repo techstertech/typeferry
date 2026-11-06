@@ -23,7 +23,10 @@ bundle exec rake verify
 applications that delegate bounded work to native tools or language workers.
 It accepts an argv array without shell interpolation, creates an isolated
 process group, and provides cancellation, timeout, result, and shutdown
-lifecycle:
+lifecycle.
+
+The first array element names the literal executable, including when the array
+has one element. Pass each argument separately; shell syntax is not parsed.
 
 ```ruby
 supervisor = TypeFerry::ProcessSupervisor.new

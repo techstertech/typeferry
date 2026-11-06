@@ -103,7 +103,7 @@ installing the fixed release; this repository task does not access those session
 - [x] Repair peer identity and Python limiter retention.
 - [x] Bound Python HTTP request bodies.
 - [x] Upgrade the Rust JWT dependency.
-- [ ] Enforce Ruby literal process execution.
+- [x] Enforce Ruby literal process execution.
 - [ ] Pin CI references and review npm provenance.
 - [ ] Complete package checks, shared conformance, and scanner verification.
 
@@ -131,5 +131,10 @@ installing the fixed release; this repository task does not access those session
   formatting, strict Clippy, and all-feature tests. Two existing tests remain
   ignored: disposable Redis lifecycle and the macro doctest. Advisory recheck
   remains pending. Independent source review approved API and claim behavior.
+- A7: generated singleton-path and shell-syntax regressions failed before the
+  fix. Process tests then passed (9 tests, 25 assertions). Isolated Redis-backed
+  verification passed (121 tests, 449 assertions, no skips), Steep, StandardRB,
+  gem build, and artifact checks. The RBS addition supplies the missing tuple
+  overload without weakening existing signatures. Independent review approved.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

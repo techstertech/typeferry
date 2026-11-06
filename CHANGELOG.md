@@ -8,6 +8,7 @@
 - security(typescript): use connection peers for quotas and request metadata
 - security(template): restrict MongoDB publication to loopback
 - security(rust): upgrade JWT claim validation to a patched release
+- security(ruby): keep singleton process commands literal
 
 ## 2026-11-04
 
