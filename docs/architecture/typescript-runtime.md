@@ -23,7 +23,13 @@ Status: informative. Follow [`typeferry-ts/AGENTS.md`](../../typeferry-ts/AGENTS
 
 `Server` and its registered method/event primitives define application behavior. `NodeHonoTransport` owns the Hono application and Node HTTP listener. `WebSocketTransport` attaches upgrade handling to the same listener before startup. Connected peers become `ClientNode` instances used by dispatch, auth, rooms, and event routing.
 
-Client-side `Client`, `ClientHttp`, and `ClientSocket` coordinate calls and connection state. The React surface observes or invokes that core; it must not reimplement transport, caching, or auth behavior. Other UI frameworks integrate through the framework-agnostic client instead of package-owned adapters.
+Client-side `Client`, `ClientHttp`, and `ClientSocket` coordinate calls and connection state. The React surface observes or invokes that core; it must not reimplement transport, server method caching, or auth behavior. Other UI frameworks integrate through the framework-agnostic client instead of package-owned adapters.
+
+`Client.href()` owns its query encoder in `src/client/href-query.ts`. The encoder
+preserves sorted keys, repeated array keys, bare null keys, and strict percent
+encoding. The React `useCaller()` hook owns only its existing RPC promise cache:
+equivalent EJSON arguments share pending calls, failures allow retries, and
+successful calls expire from fulfillment. Server method caching remains separate.
 
 Immediate connection replacement retires the active socket through
 `ClientSocket` before opening its successor. Retirement rejects pending RPCs

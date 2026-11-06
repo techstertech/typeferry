@@ -72,8 +72,8 @@ recovery is needed. No data migration or production operation is required.
 
 - [x] Remove unused type declarations and verify type resolution.
 - [x] Characterize and replace URL query serialization.
-- [ ] Characterize and replace React caller memoization.
-- [ ] Remove obsolete dependencies and inspect the retained graph.
+- [x] Characterize and replace React caller memoization.
+- [x] Remove obsolete dependencies and inspect the retained graph.
 - [ ] Complete package verification and record acceptance results.
 
 ## Verification results
@@ -88,3 +88,17 @@ src/client/client.unit.spec.ts`. A generated 152-case comparison matched the
 installed `query-string` implementation. After npm removed its four lock
 entries, the client tests and strict typecheck passed again. Scoped ESLint and
 independent source review found no material issues. Remaining checks are pending.
+
+React caller characterization passed 16 tests against `memoizee`. The local
+replacement and adjacent hooks passed 59 tests with `mise exec -- npm run
+test:unit -- src/react/hooks/use-caller.unit.spec.tsx
+src/react/hooks/use-method.unit.spec.tsx
+src/react/hooks/use-method-refresh.unit.spec.tsx`. The focused Chromium
+`use-caller.browser.spec.tsx` test passed, as did strict typecheck and scoped
+ESLint. Independent review found no material issues. Settlement uses native
+Promise reactions instead of the dependency's additional scheduler callback;
+the tested promise lifetime and retry contracts remain unchanged.
+
+The final graph contains 513 entries, down from 555. All retained package
+metadata, including versions and available integrity digests, is unchanged.
+The obsolete `es5-ext` script allowance was removed with that package.

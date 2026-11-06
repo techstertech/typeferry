@@ -13,6 +13,7 @@
 - security(deps): restore npm registry integrity metadata
 - chore(verification): pin Ruby for nested verification tools
 - refactor(client): serialize href queries without query-string
+- refactor(react): cache caller promises without memoizee
 
 ## 2026-11-04
 
