@@ -1,11 +1,21 @@
 ---
-status: implementing
+status: shipped
 created: 2026-11-05
 updated: 2026-11-05
 owner: authentication and transport maintainers
 decision: ../decisions/2026-11-05-request-peer-and-body-security.md
 implementation:
-  commits: []
+  commits:
+    - 85395f1
+    - 9732f22
+    - b5803c2
+    - aee83ce
+    - 97aeb50
+    - 3429bb2
+    - f6a29a6
+    - db3bb04
+    - 3e8636b
+    - 42efff6
 ---
 
 # Security review remediation
@@ -24,8 +34,9 @@ HTTP body limit on 2026-11-05.
 - TypeScript and Python HTTP limiters trust arbitrary forwarding headers.
   Python also retains expired limiter keys and buffers complete request bodies.
 - The template publishes unauthenticated MongoDB on all host interfaces.
-- Rust locks an affected `jsonwebtoken` release. The current typed verification
-  helper does not establish exploitation of the advisory.
+- Rust locked `jsonwebtoken` 9.3.1, affected by
+  [GHSA-h395-gr6q-cpjc](https://github.com/Keats/jsonwebtoken/security/advisories/GHSA-h395-gr6q-cpjc).
+  The typed verification helper did not establish exploitation of the advisory.
 - Ruby's process supervisor accepts a singleton string through `Kernel.spawn`,
   despite its existing argv-only contract.
 - CI references mutable actions and images; npm locks have incomplete provenance.
@@ -95,6 +106,7 @@ prefer a corrective follow-up. Revert other units independently with their tests
 and documentation. Changing the template publication does not require deleting
 its volume. Deployment owners must invalidate affected refresh sessions when
 installing the fixed release; this repository task does not access those sessions.
+Before downgrading Python, remove the new `max_body_bytes` argument from consumers.
 
 ## Execution checklist
 
@@ -105,7 +117,7 @@ installing the fixed release; this repository task does not access those session
 - [x] Upgrade the Rust JWT dependency.
 - [x] Enforce Ruby literal process execution.
 - [x] Pin CI references and review npm provenance.
-- [ ] Complete package checks, shared conformance, and scanner verification.
+- [x] Complete package checks, shared conformance, and scanner verification.
 
 ## Verification results
 
@@ -129,8 +141,9 @@ installing the fixed release; this repository task does not access those session
 - A6: Cargo resolves `jsonwebtoken` 10.3.0 with the explicit AWS-LC backend
   and no unused PEM features. Focused auth tests passed (15), as did workspace
   formatting, strict Clippy, and all-feature tests. Two existing tests remain
-  ignored: disposable Redis lifecycle and the macro doctest. Advisory recheck
-  remains pending. Independent source review approved API and claim behavior.
+  ignored: disposable Redis lifecycle and the macro doctest. The advisory recheck
+  inventories version 10.3.0 and reports no Rust JWT match. Independent source
+  review approved API and claim behavior.
 - A7: generated singleton-path and shell-syntax regressions failed before the
   fix. Process tests then passed (9 tests, 25 assertions). Isolated Redis-backed
   verification passed (121 tests, 449 assertions, no skips), Steep, StandardRB,
@@ -151,5 +164,31 @@ installing the fixed release; this repository task does not access those session
   and PATH for nested tools. The new `just verify-ruby` command passed the full
   121-test/449-assertion gate, Steep, StandardRB, gem build, and package checks,
   using an owned Redis container that the existing wrapper removed afterward.
-- Other acceptance criteria remain pending. Planned verification is not an
-  executed result.
+- Scanner verification: all nine checks completed without reported operational
+  gaps. Semgrep's 23 appsec and 38 malware-pattern matches remain contextual
+  examples or expected behavior; it reported no errors, skipped rules, or
+  fixpoint timeouts. GuardDog applied its sandbox and retained 555 matches;
+  its 733 issue counter and eleven synthesized risks are distinct measures.
+  Independent triage found no consequential new issue. Per-file/rule negative
+  completion remains unknown.
+- Zizmor dropped from eighteen findings to one low-severity notice for the
+  intentional exact-version npm bootstrap. Checkov and the tracked-source
+  signature pass reported no findings. Gitleaks repeated the same forty tree
+  and two history example/code matches; no new operational credential was
+  identified in repository inputs.
+- Grype reports no current project dependency-selection match. Its remaining
+  thirty-two artifact matches cover nine advisories in embedded development-gem
+  lockfiles. Those are not proof of installed vulnerable project dependencies.
+  All expected identities appear in the SBOM: npm 855, crates.io 229,
+  RubyGems 52, Go 5, and installed-only Python 45.
+- The scanner source snapshot was checked against final runtime source bytes.
+  Only changelog and verification-record prose changed afterward. Private
+  receipts and checksums are retained outside the checkout. Temporary scanner
+  resources and isolated test services were removed.
+- Limits: hosted CI, deployment, and live-session invalidation were not run.
+  The minimum supported Starlette version was not separately installed; tests
+  used the existing environment. Native dependency contents were not exhaustively
+  audited. Existing weak-test-key warnings and the two Rust ignores remain.
+- Post-work review added `just verify-ruby` and corrected pinned nested Ruby
+  commands. A separate global mastery update records safe process-liveness
+  output after a host credential appeared in a diagnostic process title.
