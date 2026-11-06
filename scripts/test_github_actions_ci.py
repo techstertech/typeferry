@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -24,9 +25,9 @@ def test_workflow_is_github_native() -> None:
     assert "forgejo" not in content.casefold()
     assert "data.forgejo.org" not in content
     assert "${{ github.ref }}" in content
-    assert "actions/checkout@v6" in content
-    assert "actions/setup-node@v7" in content
-    assert "actions/cache@v5" in content
+    assert re.search(r"actions/checkout@[0-9a-f]{40} # v6", content)
+    assert re.search(r"actions/setup-node@[0-9a-f]{40} # v7", content)
+    assert re.search(r"actions/cache@[0-9a-f]{40} # v5", content)
 
 
 def test_workflow_preserves_ci_contract() -> None:

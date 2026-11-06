@@ -38,15 +38,17 @@ jobs:
         working-directory: typeferry-go
     services:
       redis:
-        image: redis:7.4-alpine
+        image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
         ports:
           - 16379:6379
     env:
       TYPEFERRY_TEST_REDIS_URL: redis://127.0.0.1:16379
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: typeferry-go/go.mod
           cache-dependency-path: typeferry-go/go.mod
@@ -67,15 +69,17 @@ jobs:
         working-directory: typeferry-rb
     services:
       redis:
-        image: redis:7.4-alpine
+        image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
         ports:
           - 16379:6379
     env:
       REDIS_URL: redis://127.0.0.1:16379
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
         with:
           ruby-version: "3.4"
           bundler: 2.5.22
@@ -93,15 +97,17 @@ jobs:
       run:
         working-directory: typeferry-ts
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24.19.0
           cache: npm
           cache-dependency-path: typeferry-ts/package-lock.json
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
         with:
           ruby-version: "3.4"
           bundler: 2.5.22
@@ -129,15 +135,17 @@ jobs:
       TYPEFERRY_MONGODB_TEST_URI: mongodb://127.0.0.1:27018/?replicaSet=typeferry-ci
       TYPEFERRY_MONGODB_TEST_DB: typeferry_mongodb_ci_test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24.19.0
           cache: npm
           cache-dependency-path: typeferry-ts/package-lock.json
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: typeferry-go/go.mod
           cache-dependency-path: typeferry-go/go.mod
@@ -182,12 +190,12 @@ jobs:
           docker run --detach --rm \
             --name "$MONGO_CONTAINER" \
             --publish 127.0.0.1:27018:27018 \
-            mongo:7.0 \
+            mongo:7.0@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4 \
             mongod --bind_ip_all --port 27018 --replSet typeferry-ci
           docker run --detach --rm \
             --name "$REDIS_CONTAINER" \
             --publish 127.0.0.1:16379:6379 \
-            redis:7.4-alpine
+            redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
           for attempt in $(seq 1 60); do
             if docker exec "$MONGO_CONTAINER" mongosh --quiet --port 27018 --eval \
               'db.adminCommand({ping:1})' >/dev/null; then
@@ -228,7 +236,7 @@ jobs:
           REDIS_CONTAINER: typeferry-redis-ci
         run: docker stop "$MONGO_CONTAINER" "$REDIS_CONTAINER" || true
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright

@@ -9,6 +9,7 @@
 - security(template): restrict MongoDB publication to loopback
 - security(rust): upgrade JWT claim validation to a patched release
 - security(ruby): keep singleton process commands literal
+- security(ci): pin actions and images and disable checkout credentials
 
 ## 2026-11-04
 

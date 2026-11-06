@@ -136,5 +136,10 @@ installing the fixed release; this repository task does not access those session
   verification passed (121 tests, 449 assertions, no skips), Steep, StandardRB,
   gem build, and artifact checks. The RBS addition supplies the missing tuple
   overload without weakening existing signatures. Independent review approved.
+- A8: all eleven action references and four Redis/Mongo references now use
+  verified immutable commits or OCI index digests. All four checkouts disable
+  persisted credentials. Both existing workflow tests passed; no tests were
+  added. YAML comparison preserves other job, runner, permission, and tool
+  behavior. Hosted pipeline execution is outside this local verification.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.
