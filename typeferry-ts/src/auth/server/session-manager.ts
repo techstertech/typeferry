@@ -1,4 +1,4 @@
-import { v4 as uuid } from '@lukeed/uuid'
+import { randomUUID } from 'node:crypto'
 
 import type {
   AccessTokenPayload,
@@ -13,6 +13,9 @@ import { signAccessToken } from './jwt-utils'
 /**
  * In-memory session manager implementation.
  * Useful for testing, development, or single-instance deployments.
+ *
+ * Session identifiers and refresh credentials use independent cryptographic
+ * UUIDs so public identifiers cannot expose bearer-token randomness.
  *
  * For production multi-instance deployments, implement SessionManager
  * with a shared storage backend (MongoDB, Redis, etc.)
@@ -32,9 +35,9 @@ export class InMemorySessionManager implements SessionManager {
     userId: string,
     deviceInfo?: DeviceInfo,
   ): Promise<TokenPair> {
-    const familyId = uuid()
-    const token = uuid()
-    const sessionId = uuid()
+    const familyId = randomUUID()
+    const token = randomUUID()
+    const sessionId = randomUUID()
 
     const expiryDays = this.config.refreshTokenExpiryDays ?? 14
     const expiration = Math.floor(Date.now() / 1000) + expiryDays * 24 * 60 * 60
@@ -166,8 +169,8 @@ export class InMemorySessionManager implements SessionManager {
     session: Session,
     deviceInfo?: DeviceInfo,
   ): Promise<TokenPair> {
-    const newToken = uuid()
-    const newSessionId = uuid()
+    const newToken = randomUUID()
+    const newSessionId = randomUUID()
 
     const expiryDays = this.config.refreshTokenExpiryDays ?? 14
     const expiration = Math.floor(Date.now() / 1000) + expiryDays * 24 * 60 * 60

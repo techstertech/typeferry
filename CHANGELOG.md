@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05
+
+- security(auth): generate independent cryptographic session credentials
+
 ## 2026-11-04
 
 - fix(go): enforce protocol admission and serialization contracts

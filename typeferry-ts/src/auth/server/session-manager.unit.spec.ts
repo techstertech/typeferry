@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthConfig, DeviceInfo } from '../types'
 import { InMemorySessionManager } from './session-manager'
 
+const UUID_V4_PATTERN = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i
+
 function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
   return {
     secret: 'test-secret',
@@ -31,6 +33,40 @@ describe('InMemorySessionManager', () => {
   afterEach(() => {
     manager.destroy()
     vi.useRealTimers()
+  })
+
+  it('creates and rotates session UUIDs without Math.random', async () => {
+    vi.resetModules()
+
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => {
+      throw new Error('Session credentials must not depend on Math.random')
+    })
+    let isolatedManager: InMemorySessionManager | undefined
+
+    try {
+      const { InMemorySessionManager: FreshSessionManager } = await import('./session-manager')
+
+      isolatedManager = new FreshSessionManager(makeConfig())
+
+      const original = await isolatedManager.createSession('user-1')
+      const rotated = await isolatedManager.refreshSession(original.refreshToken)
+
+      if (!rotated) throw new Error('An active session must rotate')
+
+      expect(original.refreshToken).toMatch(UUID_V4_PATTERN)
+      expect(rotated.refreshToken).toMatch(UUID_V4_PATTERN)
+      expect(rotated.refreshToken).not.toBe(original.refreshToken)
+      expect(await isolatedManager.getUserSessions('user-1')).toEqual([
+        expect.objectContaining({
+          id: expect.stringMatching(UUID_V4_PATTERN),
+          familyId: expect.stringMatching(UUID_V4_PATTERN),
+          token: rotated.refreshToken,
+        }),
+      ])
+    } finally {
+      isolatedManager?.destroy()
+      random.mockRestore()
+    }
   })
 
   describe('createSession', () => {

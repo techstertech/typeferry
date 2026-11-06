@@ -162,6 +162,13 @@ Return `false` to reject an identity. Successful context objects may omit
 Changing or clearing an identity retires its previous index membership,
 including deauthentication and `rpc:logout`.
 
+`InMemorySessionManager` generates session IDs, token-family IDs, and refresh
+tokens with Node's cryptographic UUID generator. UUID shape and session APIs
+remain unchanged. When upgrading an application that used the earlier generator,
+restart its application instances with the fixed build to discard their in-memory
+refresh sessions. Require users to sign in again. Access-token expiry alone does
+not invalidate an existing refresh token.
+
 ## Development
 
 Run commands from `typeferry-ts/`:
