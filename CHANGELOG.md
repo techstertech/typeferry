@@ -11,6 +11,7 @@
 - security(ruby): keep singleton process commands literal
 - security(ci): pin actions and images and disable checkout credentials
 - security(deps): restore npm registry integrity metadata
+- chore(verification): pin Ruby for nested verification tools
 
 ## 2026-11-04
 

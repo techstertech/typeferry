@@ -18,13 +18,17 @@ audit-npm-dependencies:
     cd {{ package_dir }} && mise exec -- node "$(mise which npm)" audit --audit-level=low
     cd template && mise exec -- node "$(mise which npm)" audit --audit-level=low
 
+# Verify Ruby with the pinned interpreter and task-owned Redis when needed.
+verify-ruby:
+    cd typeferry-rb && PATH="$(dirname "$(mise which ruby)"):$PATH" ../scripts/run-with-redis.sh "$(mise which ruby)" "$(mise which bundle)" exec "$(mise which ruby)" -S rake verify
+
 # Replay shared fixtures across all five backends using their native consumers.
 verify-shared-fixtures:
     cd {{ package_dir }} && mise exec -- node "$(mise which npm)" run test:unit -- src/test/conformance/ejson-fixtures.unit.spec.ts
     cd {{ package_dir }} && mise exec -- node "$(mise which npm)" run test:integration -- src/test/conformance/http-fixtures.integration.spec.ts src/test/conformance/ws-fixtures.integration.spec.ts
     cd typeferry-py && .venv/bin/python -m pytest tests/conformance
     cd typeferry-rs && cargo test --locked -p typeferry-conformance
-    cd typeferry-rb && mise exec -- ruby "$(mise which bundle)" exec "$(mise which ruby)" -S rake test:conformance
+    cd typeferry-rb && PATH="$(dirname "$(mise which ruby)"):$PATH" "$(mise which ruby)" "$(mise which bundle)" exec "$(mise which ruby)" -S rake test:conformance
     cd typeferry-go && go test -count=1 ./ejson ./httptransport ./websocket ./redistransport
 
 # Run the complete non-uploading npm release and artifact gate.

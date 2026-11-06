@@ -51,8 +51,13 @@ cargo test -p typeferry-conformance
 From `typeferry-rb/`:
 
 ```sh
-bundle exec rake test:conformance
+PATH="$(dirname "$(mise which ruby)"):$PATH" "$(mise which ruby)" \
+  "$(mise which bundle)" exec "$(mise which ruby)" -S rake test:conformance
 ```
+
+The interpreter path and PATH prefix keep nested tools on the pinned Ruby.
+From the repository root, `just verify-ruby` also runs the complete Ruby gate
+with an isolated Redis instance when no test URL is supplied.
 
 From `typeferry-go/`:
 

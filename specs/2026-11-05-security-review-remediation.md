@@ -146,5 +146,10 @@ installing the fixed release; this repository task does not access those session
   roles, existing digests, and bundled entries are unchanged. An isolated
   `npm ci --ignore-scripts` passed. Both package audits found zero vulnerabilities.
   TypeScript build, pack dry-run, and generic packed-consumer verification passed.
+- A10: `CARGO_TARGET_DIR=<task-build-directory> just verify-shared-fixtures`
+  passed across all five backends. The Ruby recipe now pins both the interpreter
+  and PATH for nested tools. The new `just verify-ruby` command passed the full
+  121-test/449-assertion gate, Steep, StandardRB, gem build, and package checks,
+  using an owned Redis container that the existing wrapper removed afterward.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.
