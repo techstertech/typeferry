@@ -102,7 +102,7 @@ installing the fixed release; this repository task does not access those session
 - [x] Restrict template MongoDB publication.
 - [x] Repair peer identity and Python limiter retention.
 - [x] Bound Python HTTP request bodies.
-- [ ] Upgrade the Rust JWT dependency.
+- [x] Upgrade the Rust JWT dependency.
 - [ ] Enforce Ruby literal process execution.
 - [ ] Pin CI references and review npm provenance.
 - [ ] Complete package checks, shared conformance, and scanner verification.
@@ -126,5 +126,10 @@ installing the fixed release; this repository task does not access those session
   Isolated host and container-network MongoDB pings passed; owned Compose
   resources were removed. Template format, lint, typecheck, both build outputs,
   and audit passed. Existing unit/integration/browser suites passed (9/2/1).
+- A6: Cargo resolves `jsonwebtoken` 10.3.0 with the explicit AWS-LC backend
+  and no unused PEM features. Focused auth tests passed (15), as did workspace
+  formatting, strict Clippy, and all-feature tests. Two existing tests remain
+  ignored: disposable Redis lifecycle and the macro doctest. Advisory recheck
+  remains pending. Independent source review approved API and claim behavior.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

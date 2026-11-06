@@ -75,6 +75,12 @@ Rate limiting remains application-owned; these options configure origin admissio
 
 Enable `auth` for JWT, cookie, session, device, and OAuth helpers. Authentication establishes a principal; protected handlers must still authorize tenant, role, and resource access. Reject invalid or expired credentials, restrict origins, and keep secrets out of URLs, logs, and compiled configuration.
 
+JWT signing and verification support the configured HS256, HS384, or HS512
+algorithm. Verification requires integer `exp` and `iat` claims and checks
+expiration. The workspace selects the AWS-LC crypto backend explicitly;
+the HMAC-only API does not enable PEM decoding. `decode_token` inspects claims
+without checking the signature and must not establish authentication.
+
 Use the Redis feature when events must propagate between server instances. Keep application durability in a database or service of record rather than event payloads.
 
 ## EJSON dates and ordering

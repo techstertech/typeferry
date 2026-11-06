@@ -29,11 +29,7 @@ pub fn verify_access_token(token: &str, config: &AuthConfig) -> Option<AccessTok
 /// Decode without verifying — inspection only. Callers MUST NOT trust.
 pub fn decode_token(token: &str) -> Option<AccessTokenPayload> {
     let clean = strip_bearer(token);
-    let mut validation = Validation::default();
-    validation.insecure_disable_signature_validation();
-    validation.validate_exp = false;
-    let dummy = DecodingKey::from_secret(b"dummy");
-    let decoded = decode::<AccessTokenPayload>(clean, &dummy, &validation).ok()?;
+    let decoded = jsonwebtoken::dangerous::insecure_decode::<AccessTokenPayload>(clean).ok()?;
     Some(decoded.claims)
 }
 
@@ -50,7 +46,9 @@ fn strip_bearer(token: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::JwtAlgorithm;
     use chrono::Utc;
+    use serde_json::{Value, json};
 
     fn config() -> AuthConfig {
         AuthConfig::new("unit-test-secret-that-is-sufficiently-long")
@@ -68,10 +66,21 @@ mod tests {
     }
 
     #[test]
-    fn round_trip() {
-        let token = sign_access_token(&payload(), &config()).unwrap();
-        let decoded = verify_access_token(&token, &config()).unwrap();
-        assert_eq!(decoded.user_id, "u1");
+    fn configured_hmac_algorithms_round_trip() {
+        for algorithm in [
+            JwtAlgorithm::HS256,
+            JwtAlgorithm::HS384,
+            JwtAlgorithm::HS512,
+        ] {
+            let mut config = config();
+            config.algorithm = algorithm;
+
+            let token = sign_access_token(&payload(), &config).unwrap();
+            let decoded = verify_access_token(&token, &config).unwrap();
+
+            assert_eq!(decoded.user_id, "u1");
+            assert_eq!(decoded.session_id, "s1");
+        }
     }
 
     #[test]
@@ -89,9 +98,76 @@ mod tests {
     }
 
     #[test]
+    fn unconfigured_algorithm_is_rejected() {
+        let mut signing_config = config();
+        signing_config.algorithm = JwtAlgorithm::HS384;
+
+        let token = sign_access_token(&payload(), &signing_config).unwrap();
+
+        assert!(verify_access_token(&token, &config()).is_none());
+    }
+
+    #[test]
+    fn expired_token_is_rejected() {
+        let mut payload = payload();
+        payload.iat -= 900;
+        payload.exp = Utc::now().timestamp() - 120;
+
+        let token = sign_access_token(&payload, &config()).unwrap();
+
+        assert!(verify_access_token(&token, &config()).is_none());
+    }
+
+    #[test]
+    fn missing_timestamp_claims_are_rejected() {
+        for claim in ["exp", "iat"] {
+            let mut claims = serde_json::to_value(payload()).unwrap();
+            claims.as_object_mut().unwrap().remove(claim);
+
+            assert!(verify_access_token(&sign_claims(&claims), &config()).is_none());
+        }
+    }
+
+    #[test]
+    fn malformed_timestamp_claims_are_rejected() {
+        for claim in ["exp", "iat"] {
+            for value in [Value::Null, json!("not-a-timestamp"), json!({"value": 1})] {
+                let mut claims = serde_json::to_value(payload()).unwrap();
+                claims[claim] = value;
+
+                assert!(verify_access_token(&sign_claims(&claims), &config()).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_tokens_are_rejected() {
+        for token in ["", "not-a-token", "e30.e30.signature"] {
+            assert!(verify_access_token(token, &config()).is_none());
+        }
+    }
+
+    #[test]
     fn decode_without_verification() {
-        let token = sign_access_token(&payload(), &config()).unwrap();
+        let mut payload = payload();
+        payload.exp = Utc::now().timestamp() - 120;
+
+        let token = sign_access_token(&payload, &config()).unwrap();
         let claims = decode_token(&token).unwrap();
+
         assert_eq!(claims.user_id, "u1");
+        assert_eq!(claims.exp, payload.exp);
+        assert!(verify_access_token(&token, &config()).is_none());
+    }
+
+    fn sign_claims(claims: &Value) -> String {
+        let config = config();
+
+        encode(
+            &Header::new(config.algorithm.as_jwt()),
+            claims,
+            &EncodingKey::from_secret(config.secret.as_bytes()),
+        )
+        .unwrap()
     }
 }
