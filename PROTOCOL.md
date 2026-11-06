@@ -91,6 +91,13 @@ endpoints, not unrelated application health or static routes. Implementations
 SHOULD reject request bodies above a configurable finite byte limit before
 EJSON decoding.
 
+The Python HTTP adapter defaults to a 4 MiB limit. Its `max_body_bytes` keyword
+accepts a positive integer byte ceiling. It checks both declared length and actual
+streamed bytes after origin and quota admission, before decoding or authentication.
+Oversized requests receive HTTP 413 and retain admitted rate-limit headers.
+Transport body-size defaults may differ; this option does not change the
+TypeScript global or route-specific limits.
+
 Sources: `src/server/transports/http-transport.ts:47-48,68`,
 `src/server/transports/bun-hono-transport.ts:87,90,262,279`.
 

@@ -12,6 +12,7 @@ Implements PROTOCOL.md §2.1:
 * void calls suppress error bodies and retain successful result bodies
 * CORS with allow-credentials when origins are provided
 * sliding-window rate limiter, 120 req / 60 s by default
+* streamed request-body limits, 4 MiB by default
 
 The ASGI app is built with Starlette so consumers can mount it at any
 path or combine it with other Starlette routes via
@@ -47,6 +48,9 @@ if TYPE_CHECKING:
     from typeferry.server.server import Server
 
 
+DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
+
+
 class HttpTransport:
     """Starlette-backed HTTP transport bound to a :class:`Server`.
 
@@ -54,6 +58,10 @@ class HttpTransport:
     With an allowlist, ``allow_originless=True`` admits requests whose Origin
     header is absent. This option never permits a mismatching named origin.
     WebSocket originless admission is configured independently.
+
+    ``max_body_bytes`` must be a positive integer. Both declared lengths and
+    streamed bytes are checked after rate admission and before EJSON decoding
+    or authentication. Oversized bodies receive HTTP 413 with rate headers.
     """
 
     server: Server
@@ -61,6 +69,7 @@ class HttpTransport:
     origins: list[str] | None
     rate_limit: RateLimit | None
     limiter: SlidingWindowLimiter | None
+    max_body_bytes: int
 
     def __init__(
         self,
@@ -69,10 +78,19 @@ class HttpTransport:
         rate_limit: RateLimit | bool | None = True,
         *,
         allow_originless: bool = False,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
     ) -> None:
+        if (
+            isinstance(max_body_bytes, bool)
+            or not isinstance(max_body_bytes, int)
+            or max_body_bytes <= 0
+        ):
+            raise ValueError("max_body_bytes must be a positive integer")
+
         self.server = server
         self.origins = None if origins is None else list(origins)
         self.allow_originless = allow_originless
+        self.max_body_bytes = max_body_bytes
 
         if rate_limit is True:
             self.rate_limit = RateLimit()
@@ -134,8 +152,11 @@ class HttpTransport:
         return response
 
     async def _dispatch(self, request: Request, client_address: str) -> Response:
-        request_body = (await request.body()).decode("utf-8", errors="replace")
-        transport = _parse_transport(request_body)
+        request_body = await _read_limited_body(request, self.max_body_bytes)
+        if request_body is None:
+            return Response("", status_code=413)
+
+        transport = _parse_transport(request_body.decode("utf-8", errors="replace"))
 
         if transport is None or transport.get("payload") is None:
             return self._error(Errors.INVALID_REQUEST.value, None, None, None)
@@ -271,6 +292,30 @@ class HttpTransport:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+async def _read_limited_body(request: Request, max_body_bytes: int) -> bytearray | None:
+    """Return bounded request bytes, or None as soon as a size check fails."""
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_bytes = int(content_length)
+        except ValueError:
+            pass
+        else:
+            if declared_bytes > max_body_bytes:
+                return None
+
+    # A missing or understated Content-Length must not bypass the byte ceiling.
+    body = bytearray()
+
+    async for chunk in request.stream():
+        if len(chunk) > max_body_bytes - len(body):
+            return None
+        body.extend(chunk)
+
+    return body
 
 
 def _parse_transport(body: str) -> dict[str, Any] | None:

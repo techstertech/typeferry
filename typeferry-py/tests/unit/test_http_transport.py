@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -476,3 +477,146 @@ async def test_disabled_limiter_emits_no_rate_headers() -> None:
     async with client:
         response = await _post(client, {"payload": {"method": "missing"}})
     assert not any(name.startswith("ratelimit") for name in response.headers)
+
+
+def _build_body_probe() -> tuple[Server, list[str]]:
+    server = Server(ServerOptions())
+    calls: list[str] = []
+
+    async def auth(_node: ClientNode, _context: Any) -> bool:
+        calls.append("auth")
+        return True
+
+    async def handler(_node: ClientNode, _params: Any) -> bool:
+        calls.append("handler")
+        return True
+
+    server.set_auth(AuthSetup(auth=auth, log_in=handler))
+    server.add_method("probe", handler)
+    return server, calls
+
+
+@pytest.mark.parametrize("configured_limit", [None, 256])
+@pytest.mark.asyncio
+async def test_body_limit_accepts_its_boundary_and_rejects_one_more_byte(
+    configured_limit: int | None,
+) -> None:
+    server, calls = _build_body_probe()
+    if configured_limit is None:
+        transport = HttpTransport(server, rate_limit=False)
+        limit = 4 * 1024 * 1024
+    else:
+        transport = HttpTransport(server, rate_limit=False, max_body_bytes=configured_limit)
+        limit = configured_limit
+
+    body = {"payload": {"method": "probe", "params": ""}}
+    overhead = len(Presentation.encode(body).encode())
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app), base_url="http://test",
+    ) as client:
+        for extra, status in [(0, 200), (1, 413)]:
+            body["payload"]["params"] = "x" * (limit - overhead + extra)
+            encoded = Presentation.encode(body).encode()
+
+            assert len(encoded) == limit + extra
+            response = await client.post(HTTP_ENDPOINT_PATH, content=encoded)
+            assert response.status_code == status
+
+    assert calls == ["auth", "handler"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, False, 1.5, "4096", None])
+def test_body_limit_requires_a_positive_integer(limit: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        HttpTransport(Server(ServerOptions()), max_body_bytes=cast("int", limit))
+
+
+@pytest.mark.asyncio
+async def test_declared_body_overflow_is_rejected_without_reading_the_stream() -> None:
+    server, calls = _build_body_probe()
+    transport = HttpTransport(server, max_body_bytes=16)
+    reads = 0
+
+    async def content() -> AsyncIterator[bytes]:
+        nonlocal reads
+        reads += 1
+        yield b"x" * 17
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app), base_url="http://test",
+    ) as client:
+        response = await client.post(
+            HTTP_ENDPOINT_PATH, content=content(), headers={"content-length": "17"},
+        )
+
+    assert response.status_code == 413
+    assert response.headers["RateLimit-Remaining"] == "119"
+    assert reads == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("declared_length", [None, "1"])
+@pytest.mark.asyncio
+async def test_stream_overflow_stops_reading_before_decoding_or_dispatch(
+    declared_length: str | None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, calls = _build_body_probe()
+    transport = HttpTransport(server, max_body_bytes=16)
+    reads = 0
+
+    def unexpected_decode(_body: str) -> dict[str, Any] | None:
+        raise AssertionError("An oversized body must not reach EJSON decoding")
+
+    async def content() -> AsyncIterator[bytes]:
+        nonlocal reads
+        reads += 1
+        yield b"x" * 16
+        reads += 1
+        yield b"x"
+        raise AssertionError("The transport must stop reading after overflow")
+
+    monkeypatch.setattr("typeferry.server.transports.http._parse_transport", unexpected_decode)
+    headers = {} if declared_length is None else {"content-length": declared_length}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app), base_url="http://test",
+    ) as client:
+        response = await client.post(HTTP_ENDPOINT_PATH, content=content(), headers=headers)
+
+    assert response.status_code == 413
+    assert response.headers["RateLimit-Remaining"] == "119"
+    assert reads == 2
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_origin_and_rate_admission_precede_body_limits() -> None:
+    server, calls = _build_body_probe()
+    origin = "https://allowed.test"
+    transport = HttpTransport(
+        server, origins=[origin], rate_limit=RateLimit(max=1), max_body_bytes=1,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app), base_url="http://test",
+    ) as client:
+        forbidden = await client.post(HTTP_ENDPOINT_PATH, content=b"xx")
+        assert forbidden.status_code == 403
+        assert not any(name.startswith("ratelimit") for name in forbidden.headers)
+
+        oversized = await client.post(
+            HTTP_ENDPOINT_PATH, content=b"xx", headers={"origin": origin},
+        )
+        assert oversized.status_code == 413
+        assert oversized.headers["RateLimit-Limit"] == "1"
+        assert oversized.headers["RateLimit-Remaining"] == "0"
+        assert "RateLimit-Reset" in oversized.headers
+
+        blocked = await client.post(
+            HTTP_ENDPOINT_PATH, content=b"xx", headers={"origin": origin},
+        )
+        assert blocked.status_code == 429
+        assert blocked.headers["RateLimit-Remaining"] == "0"
+
+    assert calls == []

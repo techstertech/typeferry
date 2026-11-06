@@ -101,7 +101,7 @@ installing the fixed release; this repository task does not access those session
 - [x] Repair cryptographic session identifiers.
 - [ ] Restrict template MongoDB publication.
 - [ ] Repair peer identity and Python limiter retention.
-- [ ] Bound Python HTTP request bodies.
+- [x] Bound Python HTTP request bodies.
 - [ ] Upgrade the Rust JWT dependency.
 - [ ] Enforce Ruby literal process execution.
 - [ ] Pin CI references and review npm provenance.
@@ -115,5 +115,9 @@ installing the fixed release; this repository task does not access those session
 - A2/A3, Python: four new regressions failed before implementation. The focused
   HTTP/limiter tests then passed (40), followed by full pytest (322), Ruff, and
   mypy (53 files). Fifteen existing weak-test-key warnings remain.
+- A4: thirteen new body-limit regressions failed before implementation. Focused
+  tests then passed (53), followed by full pytest (335), Ruff, and mypy. The
+  existing weak-test-key warnings remain. Independent source review found no
+  ordering, quota-retention, or streaming-boundary regression.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

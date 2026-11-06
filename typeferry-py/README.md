@@ -80,6 +80,17 @@ trusted proxy rewriting in the ASGI host before mounting the transport. Without
 that configuration, clients behind one proxy share the proxy's quota. Inactive
 quota buckets expire lazily when another request arrives.
 
+The HTTP adapter limits request bodies to 4 MiB before EJSON decoding and
+authentication. Oversized bodies receive HTTP 413 after rate admission and keep
+the rate-limit headers. Set a positive integer `max_body_bytes` when an
+application requires a different finite byte limit:
+
+```python
+from typeferry.server.transports.http import HttpTransport
+
+http = HttpTransport(server, max_body_bytes=8 * 1024 * 1024)
+```
+
 Application-owned WebSocket handshake authentication can be configured without copying credentials into a URL:
 
 ```python
