@@ -35,12 +35,12 @@ build:
 docker-build:
     docker build --tag "{{ image }}" .
 
-# Run the image against the local replica-set MongoDB on host port 27018.
+# Run the image on the existing Compose database network.
 docker-run *args:
     docker run --rm \
-        --add-host host.docker.internal:host-gateway \
+        --network "$(docker inspect --format '{{ '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}' }}' "$(docker compose ps --quiet mongodb)")" \
         --env-file .env.server \
         --env CLIENT_ORIGIN=http://localhost:8002 \
-        --env 'DATABASE_URL=mongodb://host.docker.internal:27018/typeferry-template?replicaSet=rs0&directConnection=true' \
+        --env 'DATABASE_URL=mongodb://mongodb:27017/typeferry-template?replicaSet=rs0&directConnection=true' \
         --publish 8002:8002 \
         "{{ image }}" "$@"

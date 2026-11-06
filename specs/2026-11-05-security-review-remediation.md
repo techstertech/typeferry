@@ -99,7 +99,7 @@ installing the fixed release; this repository task does not access those session
 ## Execution checklist
 
 - [x] Repair cryptographic session identifiers.
-- [ ] Restrict template MongoDB publication.
+- [x] Restrict template MongoDB publication.
 - [x] Repair peer identity and Python limiter retention.
 - [x] Bound Python HTTP request bodies.
 - [ ] Upgrade the Rust JWT dependency.
@@ -122,5 +122,9 @@ installing the fixed release; this repository task does not access those session
   tests then passed (53), followed by full pytest (335), Ruff, and mypy. The
   existing weak-test-key warnings remain. Independent source review found no
   ordering, quota-retention, or streaming-boundary regression.
+- A5: resolved Compose configuration publishes only `127.0.0.1:27018`.
+  Isolated host and container-network MongoDB pings passed; owned Compose
+  resources were removed. Template format, lint, typecheck, both build outputs,
+  and audit passed. Existing unit/integration/browser suites passed (9/2/1).
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

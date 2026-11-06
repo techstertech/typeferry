@@ -12,7 +12,7 @@ services:
       - indexBuildMinAvailableDiskSpaceMB=50
     restart: unless-stopped
     ports:
-      - '27018:27017'
+      - '127.0.0.1:27018:27017'
     volumes:
       - mongodb-data:/data/db
     healthcheck:

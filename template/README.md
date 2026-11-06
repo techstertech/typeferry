@@ -11,8 +11,8 @@ ordered migrations, structured logs, and split Vitest coverage.
 - Docker with Compose
 
 The project pins Node 26.5.1 through `.mise.toml` and uses its bundled npm
-11.17.0. MongoDB is published on host port 27018 to avoid colliding with a
-conventional local MongoDB on 27017. The commands below assume Mise's shell
+11.17.0. MongoDB is published only on `127.0.0.1:27018` to avoid remote access
+and collisions with a conventional local MongoDB on 27017. The commands below assume Mise's shell
 activation is enabled; in non-interactive automation, prefix them with
 `mise exec --`.
 
@@ -33,6 +33,9 @@ to port 8002 during development.
 The Compose service initializes a single-node `rs0` replica set. The example
 connection uses `directConnection=true`, enabling change streams and
 transactions while keeping local member discovery stable.
+
+The local database has no authentication. Keep its published port on loopback.
+Configure authentication before allowing remote database access.
 
 ## Sample architecture
 
@@ -130,11 +133,14 @@ the Vite assets, SPA routes, `/healthz`, RPC, and WebSocket traffic on one port.
 
 ```sh
 docker build -t typeferry-template .
+MONGODB_NETWORK=$(docker inspect \
+  --format '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}' \
+  "$(docker compose ps --quiet mongodb)")
 docker run --rm \
-  --add-host host.docker.internal:host-gateway \
+  --network "$MONGODB_NETWORK" \
   --env-file .env.server \
   --env CLIENT_ORIGIN=http://localhost:8002 \
-  --env 'DATABASE_URL=mongodb://host.docker.internal:27018/typeferry-template?replicaSet=rs0&directConnection=true' \
+  --env 'DATABASE_URL=mongodb://mongodb:27017/typeferry-template?replicaSet=rs0&directConnection=true' \
   --publish 8002:8002 \
   typeferry-template
 ```
@@ -142,3 +148,6 @@ docker run --rm \
 Container environments should inject configuration through Docker or the
 deployment platform; `.env.server` is not copied into the image. `/healthz`
 checks the live MongoDB connection and drives the image health check.
+Start the Compose database before this command. The application container joins
+its existing network and uses the `mongodb` service name. The host port remains
+available only on loopback for applications running outside Docker.
