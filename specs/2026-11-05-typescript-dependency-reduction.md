@@ -22,7 +22,8 @@ dependency matrix.
 This continues the URL compatibility contract established by the
 [query-string security upgrade](2026-08-31-query-string-security-upgrade.md).
 The earlier release retained the package to keep security remediation narrow.
-This task separately authorizes its replacement.
+This task separately authorizes its replacement and supersedes the
+[earlier package-retention decision](../decisions/2026-08-31-patched-query-string-major-upgrade.md).
 
 ## Contracts and ownership
 
@@ -70,7 +71,7 @@ recovery is needed. No data migration or production operation is required.
 ## Execution checklist
 
 - [x] Remove unused type declarations and verify type resolution.
-- [ ] Characterize and replace URL query serialization.
+- [x] Characterize and replace URL query serialization.
 - [ ] Characterize and replace React caller memoization.
 - [ ] Remove obsolete dependencies and inspect the retained graph.
 - [ ] Complete package verification and record acceptance results.
@@ -80,3 +81,10 @@ recovery is needed. No data migration or production operation is required.
 The unused declaration removal passed `mise exec -- npm run typecheck` from
 `typeferry-ts/`. npm removed 23 lock entries and changed no retained package
 metadata. Remaining checks are pending.
+
+URL serialization passed all 56 client tests before and after replacement.
+The focused command was `mise exec -- npm run test:unit --
+src/client/client.unit.spec.ts`. A generated 152-case comparison matched the
+installed `query-string` implementation. After npm removed its four lock
+entries, the client tests and strict typecheck passed again. Scoped ESLint and
+independent source review found no material issues. Remaining checks are pending.

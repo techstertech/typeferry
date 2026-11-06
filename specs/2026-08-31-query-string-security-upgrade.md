@@ -1,5 +1,9 @@
 # Query String Security Upgrade
 
+Historical release record. The
+[TypeScript dependency reduction](2026-11-05-typescript-dependency-reduction.md)
+replaces the package selection in a separate task while preserving URL behavior.
+
 ## Problem
 
 `typeferry-ts@0.4.1` depends on `query-string@7.1.3`, which resolves

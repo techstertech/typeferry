@@ -1,5 +1,9 @@
 # Patched Query String Major Upgrade
 
+The dependency-retention choice is superseded by the
+[TypeScript dependency reduction](../specs/2026-11-05-typescript-dependency-reduction.md).
+The original security release and URL compatibility requirements remain valid.
+
 ## Context
 
 TypeFerry uses `query-string` solely in `Client.href()` to serialize a final

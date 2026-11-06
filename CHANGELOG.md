@@ -12,6 +12,7 @@
 - security(ci): pin actions and images and disable checkout credentials
 - security(deps): restore npm registry integrity metadata
 - chore(verification): pin Ruby for nested verification tools
+- refactor(client): serialize href queries without query-string
 
 ## 2026-11-04
 

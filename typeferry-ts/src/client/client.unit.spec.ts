@@ -971,6 +971,90 @@ describe('Client', () => {
       )
     })
 
+    it('sorts query keys lexically before encoding', () => {
+      const parameters = Object.fromEntries([
+        ['z', 'last'],
+        ['2', 'two'],
+        ['a', 'first'],
+        ['10', 'ten'],
+      ])
+
+      expect(client.href('search', parameters)).toBe(
+        `${client.clientHttp.host}/search?10=ten&2=two&a=first&z=last`,
+      )
+    })
+
+    it('strictly encodes spaces, punctuation, and Unicode in keys and values', () => {
+      const punctuation = " !'()*+&=/?:#"
+
+      expect(client.href('search', { [punctuation]: `${punctuation}é` })).toBe(
+        `${client.clientHttp.host}/search?%20%21%27%28%29%2A%2B%26%3D%2F%3F%3A%23=%20%21%27%28%29%2A%2B%26%3D%2F%3F%3A%23%C3%A9`,
+      )
+    })
+
+    it('omits undefined values and empty arrays without dropping false or zero', () => {
+      const values: unknown[] = [null, undefined, '', false, 0, 12n]
+
+      values.length += 1
+      values.push('last')
+
+      expect(
+        client.href('search', {
+          values,
+          omitted: undefined,
+          emptyArray: [],
+          emptyString: '',
+          nullValue: null,
+        }),
+      ).toBe(
+        `${client.clientHttp.host}/search?emptyString=&nullValue&values&values=&values=false&values=0&values=12&values=last`,
+      )
+    })
+
+    it('accepts typed objects and preserves JavaScript value coercion', () => {
+      interface Parameters {
+        nested: { value: number }
+        custom: { toString(): string }
+        arrays: number[][]
+      }
+
+      const parameters: Parameters = {
+        nested: { value: 1 },
+        custom: { toString: () => 'custom value' },
+        arrays: [[1, 2]],
+      }
+
+      expect(client.href('search', parameters)).toBe(
+        `${client.clientHttp.host}/search?arrays=1%2C2&custom=custom%20value&nested=%5Bobject%20Object%5D`,
+      )
+    })
+
+    it('preserves empty query suffixes and legacy special-key handling', () => {
+      const parameters = Object.fromEntries([
+        ['__proto__', 'omitted'],
+        ['', null],
+        ['constructor', 'included'],
+      ])
+
+      expect(client.href('search', {})).toBe(`${client.clientHttp.host}/search?`)
+      expect(client.href('search', { empty: [], omitted: undefined })).toBe(
+        `${client.clientHttp.host}/search?`,
+      )
+      expect(client.href('search', parameters)).toBe(
+        `${client.clientHttp.host}/search?constructor=included`,
+      )
+      expect(client.href('search', { '': [null, 'value'] })).toBe(
+        `${client.clientHttp.host}/search?&=value`,
+      )
+    })
+
+    it('rejects symbols and malformed Unicode during query encoding', () => {
+      expect(() => client.href('search', { symbol: Symbol('value') })).toThrow(
+        TypeError,
+      )
+      expect(() => client.href('search', { invalid: '\uD800' })).toThrow(URIError)
+    })
+
     it('throws when plain object is not the last argument', () => {
       expect(() => client.href({ foo: 'bar' } as any, 'path')).toThrow(
         'Parameters are only allowed in the last argument.',

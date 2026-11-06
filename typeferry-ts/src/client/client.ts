@@ -1,5 +1,4 @@
 import isEqual from 'fast-deep-equal'
-import qs from 'query-string'
 
 import { isEmpty, isPlainObject, merge } from '../utils/lodash'
 
@@ -27,6 +26,7 @@ import type { TypeFerryLogger } from './logger'
 import { logger, LogLevel } from './logger'
 import { VisibilityManager } from './visibility-manager'
 import { DEFAULT_REQUEST_TIMEOUT_MS, RequestLifetime } from './request-lifetime'
+import { stringifyHrefQuery } from './href-query'
 type Timeout = ReturnType<typeof setTimeout>
 
 export type ErrorHandler = (error: unknown) => unknown
@@ -681,15 +681,14 @@ export class Client<
    * Generates a URL path from string parts. The last argument can be a query
    * string object definition.
    */
-  href(...path: (string | Parameters<typeof qs.stringify>[0])[]) {
+  href(...path: (string | object)[]) {
     let queryString = ''
+    const parameters = path.at(-1)
 
-    if (isPlainObject(path.at(-1))) {
-      const params = path.pop()
+    if (isPlainObject(parameters)) {
+      path.pop()
 
-      if (params !== undefined && typeof params !== 'string') {
-        queryString = '?'.concat(qs.stringify(params))
-      }
+      queryString = '?'.concat(stringifyHrefQuery(parameters))
     }
 
     if (path.some(isPlainObject))
