@@ -1,12 +1,12 @@
 ---
-status: implementing
+status: shipped
 project: typeferry
 project-root: /Users/leonardo/Repositories/typeferry
 created: 2026-11-05
 updated: 2026-11-05
 owner: typescript-runtime
 implementation:
-  commits: []
+  commits: [089586f, 71487be, ddfd50f]
 ---
 
 # TypeScript dependency reduction
@@ -74,20 +74,20 @@ recovery is needed. No data migration or production operation is required.
 - [x] Characterize and replace URL query serialization.
 - [x] Characterize and replace React caller memoization.
 - [x] Remove obsolete dependencies and inspect the retained graph.
-- [ ] Complete package verification and record acceptance results.
+- [x] Complete package verification and record acceptance results.
 
 ## Verification results
 
 The unused declaration removal passed `mise exec -- npm run typecheck` from
 `typeferry-ts/`. npm removed 23 lock entries and changed no retained package
-metadata. Remaining checks are pending.
+metadata.
 
 URL serialization passed all 56 client tests before and after replacement.
 The focused command was `mise exec -- npm run test:unit --
 src/client/client.unit.spec.ts`. A generated 152-case comparison matched the
 installed `query-string` implementation. After npm removed its four lock
 entries, the client tests and strict typecheck passed again. Scoped ESLint and
-independent source review found no material issues. Remaining checks are pending.
+independent source review found no material issues.
 
 React caller characterization passed 16 tests against `memoizee`. The local
 replacement and adjacent hooks passed 59 tests with `mise exec -- npm run
@@ -102,3 +102,36 @@ the tested promise lifetime and retry contracts remain unchanged.
 The final graph contains 513 entries, down from 555. All retained package
 metadata, including versions and available integrity digests, is unchanged.
 The obsolete `es5-ext` script allowance was removed with that package.
+
+All acceptance criteria passed:
+
+| Criterion | Executed evidence |
+|---|---|
+| URL compatibility | 56 client tests before/after; 152 generated parity cases; typed-interface input typechecks |
+| Caller cache compatibility | 16 characterization tests before replacement; 59 focused hook tests; Chromium lifecycle test |
+| Removed packages absent | Manifest and lock graph inspection; built ESM and declaration import inspection; independent source review |
+| Immutable graph and audit | `npm ci --no-audit --no-fund`; exact retained-metadata comparison; `just audit-npm-dependencies` reports zero vulnerabilities for both lockfiles |
+| Full package gate | `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm run verify:consumer`, and `node scripts/verify-npm-package.mjs` all passed |
+
+The full split suite passed 1,824 unit tests, 99 integration tests, and 25
+Chromium tests: 1,948 total, with no skips. Integration enabled the Ruby backend
+and used the existing temporary MongoDB and Redis wrappers. Package inspection
+verified 580 allowed files, including emitted declarations. The packed consumer
+passed its build, unit test, and runtime import checks.
+
+The first nested launcher selected host Node 24.22.0 and stopped at the engine
+check before running tests. Verification then passed with explicit Node 24.19.0
+and npm 11.17.0 paths, with their directories prepended to child `PATH`.
+Scoped toolchain guidance now records that invocation requirement.
+
+The consumer check reported the existing `node-domexception` deprecation and a
+pending `esbuild` install-script allowance. The consumer check passed without
+changing that allowance. Hosted CI and publication were not run. Other dependency
+reductions remain outside this task.
+
+Post-work review reused the existing split runners, service wrappers, package
+inspection, and consumer check. No additional repository automation was needed.
+The reusable launcher lesson was added to the global mastery skill. Task-owned
+services were removed, and 499 MB of temporary Rust build files were deleted.
+Local verification receipts and checksums remain at
+`~/.cache/typeferry-dependency-reduction/20261105T230224/`.
