@@ -104,7 +104,7 @@ installing the fixed release; this repository task does not access those session
 - [x] Bound Python HTTP request bodies.
 - [x] Upgrade the Rust JWT dependency.
 - [x] Enforce Ruby literal process execution.
-- [ ] Pin CI references and review npm provenance.
+- [x] Pin CI references and review npm provenance.
 - [ ] Complete package checks, shared conformance, and scanner verification.
 
 ## Verification results
@@ -141,5 +141,10 @@ installing the fixed release; this repository task does not access those session
   persisted credentials. Both existing workflow tests passed; no tests were
   added. YAML comparison preserves other job, runner, permission, and tool
   behavior. Hosted pipeline execution is outside this local verification.
+- A9: pinned npm registry refresh generated 256 missing non-bundled SHA-512
+  digests. Only those metadata fields were retained; package paths, versions,
+  roles, existing digests, and bundled entries are unchanged. An isolated
+  `npm ci --ignore-scripts` passed. Both package audits found zero vulnerabilities.
+  TypeScript build, pack dry-run, and generic packed-consumer verification passed.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

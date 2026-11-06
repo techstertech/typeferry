@@ -31,6 +31,12 @@ development dependencies. Install each directory's pinned toolchain with
 `mise install` first. The recipe changes no dependencies and stops on an advisory
 or audit failure. It covers npm packages only.
 
+Inspect registry integrity metadata after regenerating a lockfile. Non-local,
+non-bundled registry entries should retain their available integrity digests.
+Bundled members are covered by their parent archive rather than an independently
+downloaded tarball. For provenance-only repairs, preserve locked versions,
+dependency roles, and existing digests; verify an immutable install and audit.
+
 ## Python
 
 Python dependency ranges live in `typeferry-py/pyproject.toml`; the repository does not maintain a Python lockfile. Keep integrations in the appropriate optional extra and install the changed extra into a clean environment before verification.

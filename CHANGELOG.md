@@ -10,6 +10,7 @@
 - security(rust): upgrade JWT claim validation to a patched release
 - security(ruby): keep singleton process commands literal
 - security(ci): pin actions and images and disable checkout credentials
+- security(deps): restore npm registry integrity metadata
 
 ## 2026-11-04
 
