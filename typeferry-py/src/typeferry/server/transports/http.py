@@ -119,21 +119,21 @@ class HttpTransport:
             return Response("", status_code=403)
 
         rate_headers: dict[str, str] = {}
+        client_address = _client_ip(request)
 
         # Rate limit first — clients that flood with malformed bodies
         # still cost parsing work, which the limiter protects against.
         if self.limiter is not None:
-            key = _client_ip(request)
-            allowed, remaining, reset_ms = self.limiter.try_consume(key)
+            allowed, remaining, reset_ms = self.limiter.try_consume(client_address)
             rate_headers = _rate_limit_headers(self, remaining, reset_ms)
             if not allowed:
                 return Response("", status_code=429, headers=rate_headers)
 
-        response = await self._dispatch(request)
+        response = await self._dispatch(request, client_address)
         response.headers.update(rate_headers)
         return response
 
-    async def _dispatch(self, request: Request) -> Response:
+    async def _dispatch(self, request: Request, client_address: str) -> Response:
         request_body = (await request.body()).decode("utf-8", errors="replace")
         transport = _parse_transport(request_body)
 
@@ -154,7 +154,7 @@ class HttpTransport:
             return self._error(Errors.METHOD_NOT_FOUND.value, None, method_name, is_void)
 
         try:
-            node = await self._build_client_node(request, transport.get("context"))
+            node = await self._build_client_node(request, transport.get("context"), client_address)
 
             if method.is_protected and not node.authenticated:
                 # METHOD_FORBIDDEN: TS envelope carries method, no uuid.
@@ -204,10 +204,12 @@ class HttpTransport:
     # ------------------------------------------------------------------
 
     async def _build_client_node(
-        self, request: Request, context: Any
+        self, request: Request, context: Any, client_address: str
     ) -> ClientNode:
         raw_headers = {k.lower(): v for k, v in request.headers.items()}
         node = ClientNode(self.server, headers=raw_headers)
+        node.remote_address = client_address
+
         client_uuid = raw_headers.get(CLIENT_ID_HEADER_KEY)
         if isinstance(client_uuid, str) and client_uuid:
             node.set_id(client_uuid)
@@ -303,9 +305,8 @@ def _empty_200() -> Response:
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # Trusted proxy rewriting belongs to the ASGI host. Header values must not
+    # override the address that host supplied for quotas or request metadata.
     if request.client is not None:
         return request.client.host
     return "unknown"

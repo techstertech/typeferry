@@ -3,6 +3,7 @@
 ## 2026-11-05
 
 - security(auth): generate independent cryptographic session credentials
+- security(python): use peer identity and expire inactive quota buckets
 
 ## 2026-11-04
 

@@ -74,6 +74,12 @@ Enabled HTTP rate limits add `RateLimit-Limit`, `RateLimit-Remaining`, and
 `RateLimit-Reset` to every admitted response, including RPC errors and HTTP 429.
 Reset values are relative seconds rounded up from the current quota window.
 
+HTTP quotas and `ClientNode.remote_address` use the ASGI-provided client address.
+The adapter ignores forwarding headers when resolving that address. Configure
+trusted proxy rewriting in the ASGI host before mounting the transport. Without
+that configuration, clients behind one proxy share the proxy's quota. Inactive
+quota buckets expire lazily when another request arrives.
+
 Application-owned WebSocket handshake authentication can be configured without copying credentials into a URL:
 
 ```python

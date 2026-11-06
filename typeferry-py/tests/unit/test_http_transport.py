@@ -15,6 +15,7 @@ from typeferry.protocol.constants import (
     TOKEN_HEADER_KEY,
 )
 from typeferry.protocol.messages import PayloadType
+from typeferry.server.client_node import ClientNode
 from typeferry.server.method import MethodOptions
 from typeferry.server.server import AuthSetup, Server, ServerOptions
 from typeferry.server.transports.http import HttpTransport
@@ -276,6 +277,72 @@ async def test_rate_limit_returns_429() -> None:
     assert blocked.status_code == 429
     assert blocked.headers.get("RateLimit-Limit") == "2"
     assert blocked.headers.get("RateLimit-Remaining") == "0"
+
+
+@pytest.mark.asyncio
+async def test_forwarding_headers_cannot_change_peer_quota_or_metadata() -> None:
+    server = Server(ServerOptions())
+    transport = HttpTransport(server, rate_limit=RateLimit(max=2))
+    peer = "203.0.113.7"
+    authenticated_peers: list[str] = []
+
+    async def auth(node: ClientNode, _context: Any) -> bool:
+        authenticated_peers.append(node.remote_address)
+        return True
+
+    async def identify(node: ClientNode, _params: Any) -> str:
+        return node.remote_address
+
+    server.set_auth(AuthSetup(auth=auth, log_in=identify))
+    server.add_method("identify", identify)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(transport.app, client=(peer, 1234)),
+        base_url="http://test",
+    ) as client:
+        for suffix in range(2):
+            response = await _post(
+                client, {"payload": {"method": "identify"}},
+                headers={"x-forwarded-for": f"198.51.100.{suffix}"},
+            )
+            assert response.status_code == 200
+            assert response.json()["result"] == peer
+
+        blocked = await _post(
+            client, {"payload": {"method": "identify"}},
+            headers={"x-forwarded-for": "198.51.100.99"},
+        )
+
+    assert blocked.status_code == 429
+    assert authenticated_peers == [peer, peer]
+
+
+@pytest.mark.asyncio
+async def test_distinct_asgi_peers_keep_separate_quotas() -> None:
+    server = Server(ServerOptions())
+    transport = HttpTransport(server, rate_limit=RateLimit(max=1))
+
+    async def identify(node: ClientNode, _params: Any) -> str:
+        return node.remote_address
+
+    server.add_method("identify", identify)
+
+    for suffix in range(1, 3):
+        peer = f"203.0.113.{suffix}"
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(transport.app, client=(peer, 1234)),
+            base_url="http://test",
+        ) as client:
+            response = await _post(
+                client, {"payload": {"method": "identify"}},
+                headers={"x-forwarded-for": "198.51.100.1"},
+            )
+            assert response.status_code == 200
+            assert response.json()["result"] == peer
+
+            blocked = await _post(client, {"payload": {"method": "identify"}})
+            assert blocked.status_code == 429
 
 
 @pytest.mark.asyncio

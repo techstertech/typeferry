@@ -112,5 +112,8 @@ installing the fixed release; this repository task does not access those session
 - A1: the new regression failed against the previous UUID generator, then all
   42 session-manager tests passed after the fix. Full package verification is
   pending the remaining TypeScript changes.
+- A2/A3, Python: four new regressions failed before implementation. The focused
+  HTTP/limiter tests then passed (40), followed by full pytest (322), Ruff, and
+  mypy (53 files). Fifteen existing weak-test-key warnings remain.
 - Other acceptance criteria remain pending. Planned verification is not an
   executed result.

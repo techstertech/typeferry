@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 
 
@@ -33,7 +33,7 @@ class SlidingWindowLimiter:
 
     def __init__(self, limit: RateLimit) -> None:
         self.limit = limit
-        self._buckets: dict[str, deque[float]] = {}
+        self._buckets: OrderedDict[str, deque[float]] = OrderedDict()
 
     def try_consume(self, key: str) -> tuple[bool, int, int]:
         """Return ``(allowed, remaining, reset_ms)`` for ``key``.
@@ -45,6 +45,14 @@ class SlidingWindowLimiter:
 
         now = time.monotonic() * 1000
         window_start = now - self.limit.interval_ms
+
+        # Buckets follow their last admitted request. Expiring the oldest first
+        # reclaims inactive clients without scanning or resetting active quotas.
+        while self._buckets:
+            oldest = next(iter(self._buckets.values()))
+            if oldest[-1] > window_start:
+                break
+            self._buckets.popitem(last=False)
 
         bucket = self._buckets.get(key)
         if bucket is None:
@@ -58,5 +66,7 @@ class SlidingWindowLimiter:
             return False, 0, math.ceil(bucket[0] + self.limit.interval_ms - now)
 
         bucket.append(now)
+        self._buckets.move_to_end(key)
+
         reset_ms = math.ceil(bucket[0] + self.limit.interval_ms - now)
         return True, max(0, self.limit.max - len(bucket)), reset_ms
