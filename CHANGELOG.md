@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-06
+
+- fix(release): preserve pinned Node and npm in release checks
+
 ## 2026-11-05
 
 - security(auth): generate independent cryptographic session credentials

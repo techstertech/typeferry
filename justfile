@@ -33,15 +33,26 @@ verify-shared-fixtures:
 
 # Run the complete non-uploading npm release and artifact gate.
 verify-npm-release: install-npm-toolchain
-    test "$(mise exec -- node --version)" = "v24.19.0"
-    test "$(mise exec -- npm --version)" = "11.17.0"
-    cd {{ package_dir }} && mise exec -- npm ci --no-audit --no-fund
-    cd {{ package_dir }} && mise exec -- npm run lint
-    cd {{ package_dir }} && mise exec -- npm run typecheck
-    cd {{ package_dir }} && ../scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh mise exec -- npm test
-    cd {{ package_dir }} && mise exec -- npm run build
-    cd {{ package_dir }} && mise exec -- npm run verify:consumer
-    mise exec -- node scripts/verify-npm-package.mjs
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    node_path="$(mise which node)"
+    npm_path="$(mise which npm)"
+
+    # Pin shebangs and nested npm commands as well as the parent interpreter.
+    export PATH="$(dirname "$npm_path"):$(dirname "$node_path"):$PATH"
+
+    test "$("$node_path" --version)" = "v24.19.0"
+    test "$("$node_path" "$npm_path" --version)" = "11.17.0"
+
+    cd {{ package_dir }}
+    "$node_path" "$npm_path" ci --no-audit --no-fund
+    "$node_path" "$npm_path" run lint
+    "$node_path" "$npm_path" run typecheck
+    ../scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh "$node_path" "$npm_path" test
+    "$node_path" "$npm_path" run build
+    "$node_path" "$npm_path" run verify:consumer
+    "$node_path" ../scripts/verify-npm-package.mjs
 
 # Validate irreversible publish preconditions before running the longer gate.
 [private]

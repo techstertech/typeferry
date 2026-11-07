@@ -17,6 +17,11 @@ The repository-level release gate installs and selects Node.js `24.19.0` and npm
 just verify-npm-release
 ```
 
+The recipe resolves Node and npm paths before changing `PATH`. It invokes npm
+through the selected Node interpreter. Child commands receive the selected npm
+directory before the Node directory. This avoids host runtime selection through
+script shebangs and Node's bundled npm wrapper.
+
 The integration suite requires Redis. When `REDIS_URL` is set, the release gate
 uses that service unchanged. Otherwise, it starts `redis:7-alpine` with Docker,
 publishes Redis on a dynamically assigned `127.0.0.1` port, waits for readiness,

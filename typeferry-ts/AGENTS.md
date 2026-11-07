@@ -5,8 +5,9 @@ These instructions apply under `typeferry-ts/` and extend the repository root in
 ## Toolchain and commands
 
 - Use exact Node.js `24.19.0` and npm `11.17.0`.
-- For nested launchers, prepend the pinned Node and npm directories to `PATH`.
-  Invoke npm through the pinned Node with `mise exec -- node "$(mise which npm)"`.
+- Resolve pinned Node and npm paths before changing `PATH`.
+  Put the npm directory before the Node directory in child `PATH`.
+  Invoke the selected Node and npm paths directly; nested Mise execution can reset runtime selection.
 - Run every npm command with `typeferry-ts/` as the working directory.
 - Treat `package-lock.json` as authoritative. Use `npm ci` for immutable installs and npm commands for dependency changes so the manifest and lockfile remain synchronized.
 - Use the split runners: `npm run test:unit`, `npm run test:integration`, and `npm run test:browser`. `npm test` runs all three.
