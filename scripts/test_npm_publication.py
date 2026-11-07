@@ -27,7 +27,7 @@ def test_root_justfile_has_safe_npm_release_recipes() -> None:
     assert "verify-npm-release:" in justfile
     assert "publish-npm:" in justfile
     assert "verify-npm-release: install-npm-toolchain" in justfile
-    assert "npm ci --no-audit --no-fund" in justfile
+    assert '"$node_path" "$npm_path" ci --no-audit --no-fund' in justfile
     assert "assert-npm-publish-state: install-npm-toolchain" in justfile
     assert "mise exec -- npm whoami" in justfile
     assert "mise exec -- node scripts/verify-npm-package.mjs" in justfile
@@ -38,7 +38,7 @@ def test_root_justfile_has_safe_npm_release_recipes() -> None:
     assert "git diff --quiet" in justfile
     assert "refs/heads/main" in justfile
     assert (
-        "scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh mise exec -- npm test"
+        'scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh "$node_path" "$npm_path" test'
     ) in justfile
 
     package_validator = (ROOT / "scripts" / "verify-npm-package.mjs").read_text(

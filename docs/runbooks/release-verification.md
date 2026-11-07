@@ -22,6 +22,14 @@ through the selected Node interpreter. Child commands receive the selected npm
 directory before the Node directory. This avoids host runtime selection through
 script shebangs and Node's bundled npm wrapper.
 
+The TypeScript gate excludes the root release-workflow contract test. After
+editing release recipes, run this existing check from the repository root.
+It requires the Python development environment:
+
+```sh
+typeferry-py/.venv/bin/python -m pytest scripts/test_npm_publication.py::test_root_justfile_has_safe_npm_release_recipes -q
+```
+
 The integration suite requires Redis. When `REDIS_URL` is set, the release gate
 uses that service unchanged. Otherwise, it starts `redis:7-alpine` with Docker,
 publishes Redis on a dynamically assigned `127.0.0.1` port, waits for readiness,

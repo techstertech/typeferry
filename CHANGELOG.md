@@ -3,6 +3,7 @@
 ## 2026-11-07
 
 - chore(release): prepare TypeScript 0.16.0 candidate
+- test(release): refresh pinned-runtime recipe expectations
 
 ## 2026-11-06
 
