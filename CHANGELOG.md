@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-07
+
+- chore(release): prepare TypeScript 0.16.0 candidate
+
 ## 2026-11-06
 
 - fix(release): preserve pinned Node and npm in release checks

@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.15.3` | Published; public npm `latest` |
+| TypeScript     | `typeferry`                   | `0.16.0` | Candidate; public npm `latest` remains `0.15.3` |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -42,6 +42,24 @@ adapter dependencies. MongoDB live views, a Go client and extra OAuth providers
 are outside the accepted shared server scope.
 
 ## TypeScript release
+
+### 0.16.0 candidate
+
+The candidate combines protocol-boundary corrections, cryptographic session
+credentials, connection-peer rate limiting, and the TypeScript dependency
+reduction. The minor version reflects the new public `allowOriginless` and
+`ws.allowOriginless` options added since the published `0.15.3` release.
+
+Configured origin allowlists reject missing origins by default. Applications
+can explicitly allow missing origins separately for HTTP and WebSocket.
+Peer-based quotas can group clients behind a proxy. See the
+[protocol compatibility decision](decisions/2026-11-04-protocol-boundary-and-ejson-compatibility.md),
+[security remediation](specs/2026-11-05-security-review-remediation.md), and
+[dependency reduction](specs/2026-11-05-typescript-dependency-reduction.md).
+
+The package manifest and lockfile select `0.16.0`; dependency versions remain
+unchanged by this version bump. Release verification and publication dry run
+are pending. Publication, tags, and pushes remain operator-owned.
 
 ### Browser sleep authentication patch
 
