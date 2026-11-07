@@ -58,8 +58,22 @@ Peer-based quotas can group clients behind a proxy. See the
 [dependency reduction](specs/2026-11-05-typescript-dependency-reduction.md).
 
 The package manifest and lockfile select `0.16.0`; dependency versions remain
-unchanged by this version bump. Release verification and publication dry run
-are pending. Publication, tags, and pushes remain operator-owned.
+unchanged by this version bump. Verification on `978923f` passed the complete
+`just verify-npm-release` gate: 1,824 unit tests, 99 integration tests, and 25
+Chromium tests, with no skips and Ruby interoperability enabled. Lint, typecheck,
+build, packed-consumer checks, and 580-file package inspection passed.
+`npm audit --audit-level=low` reported zero vulnerabilities.
+
+`npm publish --dry-run --json --access public --registry=https://registry.npmjs.org/`
+passed. Its package report matches the retained `npm pack` archive, including
+version, file list, size, SHA-1, and npm integrity. The 308,130-byte archive
+`typeferry-0.16.0.tgz` has SHA-256
+`a9150542bfa6ffd753b2dd275b63f206a61466381f9e1d547038112acf4cc07c`.
+
+The consumer check retains its `node-domexception` deprecation and pending
+`esbuild` install-script notice. Upload authorization and hosted CI were not
+verified. The candidate remains unpublished; publication, tags, and pushes
+remain operator-owned.
 
 ### Browser sleep authentication patch
 
@@ -262,7 +276,7 @@ The recipe requires:
 Only after those checks does it execute `npm publish --access public`. The
 recipe does not bump versions, create Git tags, push commits, or store
 credentials. After npm confirms the upload, create the annotated Git tag
-`v<version>` (for this patch, `v0.13.1`) and push the release commit and tag. No GitHub release is created.
+`v<version>` and push the release commit and tag. No GitHub release is created.
 
 An npm version cannot be reused after publication. If a release is incorrect, deprecate it as appropriate, fix the repository, choose a higher semantic version, and rerun the gate.
 
