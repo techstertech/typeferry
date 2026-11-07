@@ -6,7 +6,7 @@ The TypeScript implementation is configured for operator-controlled publication 
 
 | Implementation | Registry identity             |  Version | Status                                   |
 | -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.16.0` | Candidate; public npm `latest` remains `0.15.3` |
+| TypeScript     | `typeferry`                   | `0.16.0` | Published; public npm `latest` |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
 | Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
@@ -43,7 +43,9 @@ are outside the accepted shared server scope.
 
 ## TypeScript release
 
-### 0.16.0 candidate
+<a id="0160-candidate"></a>
+
+### 0.16.0 release
 
 The candidate combines protocol-boundary corrections, cryptographic session
 credentials, connection-peer rate limiting, and the TypeScript dependency
@@ -70,10 +72,22 @@ version, file list, size, SHA-1, and npm integrity. The 308,130-byte archive
 `typeferry-0.16.0.tgz` has SHA-256
 `a9150542bfa6ffd753b2dd275b63f206a61466381f9e1d547038112acf4cc07c`.
 
+Public npm verification on 2026-11-07 confirms `typeferry@0.16.0` is published
+and is `latest`. Registry `gitHead` matches signed handoff commit
+`db2e3a7c423da360201f98f1006748ffa329ec8a`. Its package source matches the
+tested commit `978923f`.
+
+The downloaded registry archive is byte-identical to the verified candidate.
+Its SHA-1, SHA-256, SHA-512 integrity, 308,130-byte size, and all 580 files match.
+There are no missing, extra, or changed files. Published dependency, export,
+engine, license, and binary metadata also match the archive manifest.
+The previous test evidence applies to this exact artifact; no package code was
+executed during the integrity check.
+
 The consumer check retains its `node-domexception` deprecation and pending
-`esbuild` install-script notice. Upload authorization and hosted CI were not
-verified. The candidate remains unpublished; publication, tags, and pushes
-remain operator-owned.
+`esbuild` install-script notice. Hosted CI and npm signing-key provenance were
+not separately audited. Publication occurred outside this verification; the
+agent did not publish, push, or tag the release.
 
 ### Browser sleep authentication patch
 
