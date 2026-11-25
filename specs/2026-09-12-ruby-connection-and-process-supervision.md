@@ -1,6 +1,6 @@
 # Ruby Connection and Process Supervision
 
-Status: active
+Status: superseded by [the Ruby server retirement](2026-11-25-ruby-server-retirement.md)
 
 ## Problem
 

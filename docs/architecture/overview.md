@@ -4,26 +4,27 @@ Status: informative description of the current repository. [`PROTOCOL.md`](../..
 
 ## System shape
 
-TypeFerry implements one RPC, event, authentication, and serialization protocol across five languages:
+TypeFerry implements one RPC, event, authentication, and serialization protocol across four languages.
 
 ```text
                        PROTOCOL.md
                             |
                   shared conformance fixtures
                             |
-       +-------------+-------------+-------------+-------------+
-       |             |             |             |             |
- typeferry-ts  typeferry-py  typeferry-rs  typeferry-rb  typeferry-go
-client + server    server        server        server      server
+       +-------------+------+------+-------------+
+       |             |             |             |
+ typeferry-ts  typeferry-py  typeferry-rs  typeferry-go
+client + server    server        server        server
 ```
 
-The TypeScript package is the only browser/client implementation. Python,
-Rust, Ruby, and Go target server-side feature parity. Shared fixtures make behavior
+The TypeScript package is the only client implementation. Python, Rust,
+and Go target server-side feature parity. Shared fixtures make behavior
 observable without requiring identical internal APIs.
 
-Go is a locally validated, unpublished candidate awaiting public API review
-and remote CI. Its core EJSON/protocol/runtime packages stay independent of
-optional transport, Redis and auth adapters; applications own HTTP listeners.
+Go has an approved public API and passed local and remote parity checks. It has
+no release tag. Its core EJSON, protocol, and runtime packages stay independent
+of optional transport, Redis, and authentication adapters. Applications own HTTP
+listeners.
 
 The proposed batteries-included TypeScript application workflow is described
 in the [application framework and toolchain proposal](application-framework-toolchain.md).

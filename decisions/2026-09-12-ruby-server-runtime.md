@@ -1,5 +1,7 @@
 # Ruby server runtime
 
+Status: superseded by [the Ruby server retirement](../specs/2026-11-25-ruby-server-retirement.md)
+
 ## Context
 
 SolidScript needs a Ruby application server while retaining TypeFerry revision

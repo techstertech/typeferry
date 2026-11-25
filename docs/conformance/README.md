@@ -6,7 +6,6 @@ tracks:
 - `typeferry-ts/` (TypeScript, reference)
 - `typeferry-py/` (Python port)
 - `typeferry-rs/` (Rust port)
-- `typeferry-rb/` (Ruby port)
 - `typeferry-go/` (Go server)
 
 Each fixture is a frozen wire-contract point. Every fixture MUST produce the

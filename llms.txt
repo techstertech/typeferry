@@ -30,8 +30,7 @@ instructions are separate from application guidance.
 
 - [Application framework conventions](https://github.com/leonardoventurini/typeferry/blob/main/docs/architecture/application-framework-toolchain.md): Framework-owned commands, defaults, configuration, and boundaries.
 - [Wire protocol](https://github.com/leonardoventurini/typeferry/blob/main/PROTOCOL.md): Normative cross-language protocol.
-- [Documentation home](https://github.com/leonardoventurini/typeferry/blob/main/docs/README.md): Complete documentation map, including Python, Rust, and Ruby servers.
-- [Ruby server](https://github.com/leonardoventurini/typeferry/blob/main/typeferry-rb/README.md): Rack/Puma deployment, Redis propagation, authentication, and local verification.
+- [Documentation home](https://github.com/leonardoventurini/typeferry/blob/main/docs/README.md): Complete documentation map, including Python, Rust, and Go servers.
 
 ## Optional maintainer context
 

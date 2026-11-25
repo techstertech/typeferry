@@ -42,7 +42,6 @@ def test_workflow_preserves_ci_contract() -> None:
 
     required_paths = {
         "typeferry-ts/**",
-        "typeferry-rb/**",
         "typeferry-go/**",
         "docs/conformance/**",
         "PROTOCOL.md",

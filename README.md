@@ -83,7 +83,7 @@ The framework-independent client works in browsers and Node.js, while React is
 an adapter over that client rather than a separate runtime. The same React
 application can also be packaged for iOS through the optional Capacitor tools.
 
-For services that cross language boundaries, Python, Rust, Ruby, and Go server
+For services that cross language boundaries, Python, Rust, and Go server
 implementations target the same documented wire protocol and shared
 conformance fixtures. TypeScript remains the reference and only currently
 published package.
@@ -288,15 +288,15 @@ through the typed server method, MongoDB, and the real-time invalidation path.
 
 ## One protocol, multiple server runtimes
 
-TypeScript is the reference and only currently published package. Python and
-Rust implement the same normative wire protocol for server-side interoperability.
+TypeScript is the reference and only currently published package.
+Python, Rust, and Go implement the same normative wire protocol.
 
 | Implementation | Server | Client | UI adapter | Status |
 |---|---:|---:|---|---|
 | [TypeScript](typeferry-ts/README.md) | Node.js | Browser and Node.js | React | Published as `typeferry` |
 | [Python](typeferry-py/README.md) | Yes | — | — | Publication disabled |
 | [Rust](typeferry-rs/README.md) | Yes | — | — | Publication disabled |
-| [Ruby](typeferry-rb/README.md) | Yes | — | — | Publication disabled |
+| [Go](typeferry-go/README.md) | Yes | — | — | Approved API, no release tag |
 
 All implementations share the normative [wire protocol](PROTOCOL.md),
 [conformance fixtures](docs/conformance/README.md), and interoperability tests.
@@ -327,7 +327,7 @@ See [release status](RELEASING.md) for current publication details.
 typeferry-ts/   TypeScript application framework, client, and Node.js server
 typeferry-py/   Python server implementation
 typeferry-rs/   Rust server workspace
-typeferry-rb/   Ruby server gem
+typeferry-go/   Go server module
 template/       React, Node.js, and MongoDB reference application
 docs/           User guides, architecture, protocol, and conformance docs
 PROTOCOL.md     Normative wire protocol

@@ -95,7 +95,6 @@
     "test:unit:watch": "vitest --config vitest.config.unit.ts --watch",
     "test:coverage": "vitest --config vitest.config.unit.ts --run --coverage",
     "test:integration": "vitest --config vitest.config.integration.ts --run --watch=false",
-    "test:interop:ruby": "TYPEFERRY_RUBY_INTEGRATION=1 vitest --config vitest.config.integration.ts --run --watch=false src/test/conformance/cross-lang-rb.integration.spec.ts",
     "test:integration:watch": "vitest --config vitest.config.integration.ts --watch",
     "test:browser": "vitest --config vitest.config.browser.ts --run --watch=false",
     "test:browser:watch": "vitest --config vitest.config.browser.ts --watch",

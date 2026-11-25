@@ -1,5 +1,7 @@
 # Ruby Rack security boundaries
 
+Status: superseded by [the Ruby server retirement](2026-11-25-ruby-server-retirement.md)
+
 ## Problem
 
 The Ruby Rack transports treat an omitted origin as allowed, read request bodies

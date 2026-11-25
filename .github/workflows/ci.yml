@@ -5,7 +5,6 @@ on:
     branches: [main]
     paths:
       - "typeferry-ts/**"
-      - "typeferry-rb/**"
       - "typeferry-go/**"
       - "docs/conformance/**"
       - "PROTOCOL.md"
@@ -14,7 +13,6 @@ on:
   pull_request:
     paths:
       - "typeferry-ts/**"
-      - "typeferry-rb/**"
       - "typeferry-go/**"
       - "docs/conformance/**"
       - "PROTOCOL.md"
@@ -59,68 +57,6 @@ jobs:
           go test ./...
           go test -race ./...
           go vet ./...
-
-  ci-ruby:
-    name: CI (typeferry-rb)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: typeferry-rb
-    services:
-      redis:
-        image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
-        ports:
-          - 16379:6379
-    env:
-      REDIS_URL: redis://127.0.0.1:16379
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-
-      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
-        with:
-          ruby-version: "3.4"
-          bundler: 2.5.22
-          bundler-cache: true
-          working-directory: typeferry-rb
-
-      - name: Verify Ruby server
-        run: bundle exec rake verify
-
-  cross-language-ruby:
-    name: Cross-language (TypeScript client → Ruby server)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: typeferry-ts
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: 24.19.0
-          cache: npm
-          cache-dependency-path: typeferry-ts/package-lock.json
-
-      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
-        with:
-          ruby-version: "3.4"
-          bundler: 2.5.22
-          bundler-cache: true
-          working-directory: typeferry-rb
-
-      - name: Install TypeScript dependencies
-        run: npm ci
-
-      - name: Verify TypeScript to Ruby interoperability
-        env:
-          TYPEFERRY_RUBY_INTEGRATION: "1"
-        run: npm run test:integration -- src/test/conformance/cross-lang-rb.integration.spec.ts
 
   ci-ts:
     name: CI (typeferry-ts)

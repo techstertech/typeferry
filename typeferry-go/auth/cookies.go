@@ -31,7 +31,7 @@ func (options CookieOptions) resolved(production bool) (bool, string, string) {
 	return secure, sameSite, path
 }
 
-// SetRefreshTokenCookie uses the same ordered attributes as the Ruby server.
+// SetRefreshTokenCookie formats the refresh token as a Set-Cookie header value.
 func SetRefreshTokenCookie(token string, options CookieOptions, production bool) string {
 	secure, sameSite, path := options.resolved(production)
 	parts := []string{options.Name + "=" + encodeCookie(token), "HttpOnly", "Path=" + path,

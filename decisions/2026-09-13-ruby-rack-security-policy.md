@@ -1,5 +1,7 @@
 # Ruby Rack security policy
 
+Status: superseded by [the Ruby server retirement](../specs/2026-11-25-ruby-server-retirement.md)
+
 ## Context
 
 Rack HTTP bodies were unbounded, configured origin allowlists accepted missing

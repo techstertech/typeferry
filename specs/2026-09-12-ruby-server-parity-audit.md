@@ -2,6 +2,8 @@
 
 Status: complete
 
+This audit records the server before [its retirement](2026-11-25-ruby-server-retirement.md).
+
 ## Problem
 
 SolidScript Studio may replace its Rust HTTP server with a Ruby server while
@@ -85,3 +87,18 @@ Before a SolidScript cutover, close duplicate-client semantics, define Ruby
 request cancellation and native-engine supervision, implement application
 routes/persistence/static serving, and run the TypeScript client plus
 SolidScript black-box HTTP/WebSocket suites against the Ruby server.
+
+## Consumer gate evidence from 2026-09-13
+
+The Ruby server passed the shared HTTP, WebSocket, authentication, origin,
+duplicate-client, metadata, limit, event, malformed-input, and lifecycle
+fixtures used by SolidScript Studio. The TypeScript client passed its
+interoperability suite against Ruby without a client compatibility branch.
+SolidScript owned its downstream `studio.*` application-contract suite.
+
+TypeFerry ran these commands at the verified revision.
+
+```sh
+(cd typeferry-rb && bundle exec rake test:conformance)
+(cd typeferry-ts && npm run test:interop:ruby)
+```

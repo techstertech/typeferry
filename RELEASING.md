@@ -1,6 +1,6 @@
 # TypeFerry Release Status
 
-The TypeScript implementation is configured for operator-controlled publication to the public npm registry. Python, Rust, Ruby, and Go publication remains disabled until their registry identities and workflows are approved separately.
+The TypeScript implementation is configured for operator-controlled publication to the public npm registry. Python, Rust, and Go releases require separate publication approval.
 
 ## Registry Identities
 
@@ -9,7 +9,6 @@ The TypeScript implementation is configured for operator-controlled publication 
 | TypeScript     | `typeferry`                   | `0.16.0` | Published; public npm `latest` |
 | Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
 | Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
-| Ruby           | `typeferry-rb`                |  `0.1.0` | Temporary identity; publication disabled |
 | Go             | `github.com/leonardoventurini/typeferry/typeferry-go` | Untagged | Approved API; local and remote parity passed; no release tag |
 
 ## Go candidate review
@@ -298,10 +297,8 @@ An npm version cannot be reused after publication. If a release is incorrect, de
 
 - `typeferry-py/pyproject.toml` retains a temporary distribution identity and has no publication workflow.
 - `typeferry-rs/Cargo.toml` keeps workspace publication set to `false`.
-- `typeferry-rb/` builds a local gem for verification but has no RubyGems publication workflow.
-- `typeferry-go/` is an in-repository Go module under parity review. Its
-  example and Go/TypeScript interoperability suites compile and run locally;
-  no version tag or Go module release has been approved.
+- `typeferry-go/` has an approved public API. It passed local and remote parity
+  checks and has no release tag.
 - No GitHub workflow uploads packages or contains registry credentials.
 
 Enabling PyPI or crates.io publication requires a separate identity, authentication, dependency-order, migration, and rollout decision.

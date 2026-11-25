@@ -1,6 +1,6 @@
 # TypeFerry Ruby Server
 
-Status: accepted; implementation in progress
+Status: superseded by [the Ruby server retirement](2026-11-25-ruby-server-retirement.md)
 
 Date: 2026-09-12
 
@@ -698,8 +698,8 @@ blocks accepting this implementation plan.
 - [x] Run and report the complete Ruby verification gate.
 - [x] Run and report TypeScript-to-Ruby black-box verification.
 - [x] Confirm no `PROTOCOL.md` or fixture change was needed.
-- [ ] Record a decision for the accepted Ruby architecture after implementation.
-- [ ] Keep Phase 8 blocked until separately approved.
+- [x] Record the [Ruby server runtime decision](../decisions/2026-09-12-ruby-server-runtime.md).
+- Drop Phase 8 publication because the server is retired.
 
 ## Observable final acceptance criteria
 

@@ -132,8 +132,8 @@ func VerifyAccessToken(token string, config Config, now time.Time) (AccessTokenP
 	return payload, nil
 }
 
-// DecodeAccessToken reads claims without authenticating them. Never use its
-// output for authorization; it exists for the same diagnostic path as Ruby.
+// DecodeAccessToken reads unverified claims for diagnostics.
+// Never use its output for authorization.
 func DecodeAccessToken(token string) (AccessTokenPayload, error) {
 	parts := strings.Split(strings.TrimPrefix(token, "Bearer "), ".")
 	if len(parts) != 3 {

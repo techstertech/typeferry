@@ -80,19 +80,6 @@ Review `Cargo.lock` and the feature graph. Avoid enabling broad default features
 Run `cargo audit` with `cargo-audit` installed. Allow its advisory database to
 refresh. Report vulnerability findings and unsoundness warnings separately.
 
-## Ruby
-
-From `typeferry-rb/`, update affected gems conservatively:
-
-```sh
-mise exec -- bundle update --conservative <gem>
-mise exec -- bundle exec rake verify
-mise exec -- bundler-audit check --update
-```
-
-Install `bundler-audit` separately when absent. Ensure nested Ruby commands use
-the pinned runtime. Provide Redis for the complete integration suite.
-
 ## Go
 
 From `typeferry-go/`, update the affected module and review both module files:

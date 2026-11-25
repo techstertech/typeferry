@@ -32,6 +32,9 @@ implementation:
 
 # Go server parity
 
+The comparison set below reflects the original parity review.
+See the [Ruby server retirement](2026-11-25-ruby-server-retirement.md) for current support.
+
 ## Outcome
 
 Add a first-class Go server implementation of TypeFerry. A TypeScript client

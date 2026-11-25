@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-25
+
+- remove(server): retire the Ruby implementation
+
 ## 2026-11-07
 
 - chore(release): prepare TypeScript 0.16.0 candidate
