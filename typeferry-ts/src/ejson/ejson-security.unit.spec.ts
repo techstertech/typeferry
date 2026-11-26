@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
+import { Presentation } from '../utils/presentation'
 import { EJSON } from './index'
 
 describe('EJSON security hardening', () => {
@@ -39,5 +40,29 @@ describe('EJSON security hardening', () => {
     expect(() => EJSON.stringify(deepObject, { canonical: true })).toThrow(
       /depth/i,
     )
+
+    let deepEscapeJson = '{"$date":0}'
+    let deepEscapeObj: Record<string, unknown> = { $date: 0 }
+    for (let i = 0; i < depth; i++) {
+      deepEscapeJson = `{"$escape":${deepEscapeJson}}`
+      deepEscapeObj = { $escape: deepEscapeObj }
+    }
+    expect(() => EJSON.parse(deepEscapeJson)).toThrow(/depth/i)
+    expect(() => EJSON.stringify(deepEscapeObj)).toThrow(/depth/i)
+  })
+
+  it('generates RFC 4122 v4 UUIDs via getRandomValues when randomUUID is absent', () => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(
+      globalThis.crypto,
+    )
+    vi.stubGlobal('crypto', { getRandomValues })
+    try {
+      const id = Presentation.uuid()
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

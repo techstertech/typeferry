@@ -21,7 +21,7 @@ export const adjustTypesFromJSONValue = (obj: unknown, depth = 0): unknown => {
     return null
   }
 
-  const maybeChanged = fromJSONValueHelper(obj)
+  const maybeChanged = fromJSONValueHelper(obj, depth)
   if (maybeChanged !== obj) {
     return maybeChanged
   }
@@ -36,7 +36,7 @@ export const adjustTypesFromJSONValue = (obj: unknown, depth = 0): unknown => {
   keysOf(obj).forEach(key => {
     const value = obj[key]
     if (isObject(value)) {
-      const changed = fromJSONValueHelper(value)
+      const changed = fromJSONValueHelper(value, depth)
       if (value !== changed) {
         defineOwnProperty(obj, key, changed)
         return

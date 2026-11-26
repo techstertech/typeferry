@@ -4,12 +4,12 @@
  */
 import { builtinConverters } from '../built-in-converters'
 
-export const toJSONValueHelper = (item: unknown): unknown => {
+export const toJSONValueHelper = (item: unknown, depth = 0): unknown => {
   for (let i = 0; i < builtinConverters.length; i++) {
     const converter = builtinConverters[i]
     if (!converter) continue
     if (converter.matchObject(item)) {
-      return converter.toJSONValue(item)
+      return converter.toJSONValue(item, depth)
     }
   }
   return undefined

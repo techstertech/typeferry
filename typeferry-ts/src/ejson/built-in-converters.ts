@@ -1,7 +1,7 @@
 import { decodeBase64, encodeBase64 } from './base64'
 import { customTypes } from './custom-types'
 import { EJSON } from './index'
-import { defineOwnProperty, hasOwn, isInfOrNaN, keysOf, lengthOf } from './utils'
+import { MAX_EJSON_DEPTH, defineOwnProperty, hasOwn, isInfOrNaN, keysOf, lengthOf } from './utils'
 
 type EJSONRecord = Record<string, unknown>
 
@@ -13,8 +13,8 @@ interface CustomEJSONValue {
 export interface EJSONConverter {
   matchJSONValue(value: unknown): boolean
   matchObject(value: unknown): boolean
-  toJSONValue(value: unknown): unknown
-  fromJSONValue(value: unknown): unknown
+  toJSONValue(value: unknown, depth?: number): unknown
+  fromJSONValue(value: unknown, depth?: number): unknown
 }
 
 function isRecord(value: unknown): value is EJSONRecord {
@@ -106,22 +106,30 @@ export const escapeConverter = {
         builtinConverters.some(converter => converter.matchJSONValue(value))
       )
     },
-    toJSONValue: value => {
+    toJSONValue: (value, depth = 0) => {
+      if (depth > MAX_EJSON_DEPTH) {
+        throw new RangeError('Maximum EJSON nesting depth exceeded')
+      }
+
       const record = requireRecord(value)
       const escaped: EJSONRecord = {}
 
       for (const key of keysOf(record)) {
-        defineOwnProperty(escaped, key, EJSON.toJSONValue(record[key]))
+        defineOwnProperty(escaped, key, EJSON.toJSONValue(record[key], depth + 1))
       }
 
       return { $escape: escaped }
     },
-    fromJSONValue: value => {
+    fromJSONValue: (value, depth = 0) => {
+      if (depth > MAX_EJSON_DEPTH) {
+        throw new RangeError('Maximum EJSON nesting depth exceeded')
+      }
+
       const escaped = requireRecord(requireRecord(value)['$escape'])
       const result: EJSONRecord = {}
 
       for (const key of keysOf(escaped)) {
-        defineOwnProperty(result, key, EJSON.fromJSONValue(escaped[key]))
+        defineOwnProperty(result, key, EJSON.fromJSONValue(escaped[key], depth + 2))
       }
 
       return result

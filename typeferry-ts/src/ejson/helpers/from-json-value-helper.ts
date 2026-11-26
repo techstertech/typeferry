@@ -7,7 +7,7 @@
 import { builtinConverters } from '../built-in-converters'
 import { isObjectRecord, keysOf } from '../utils'
 
-export const fromJSONValueHelper = (value: unknown): unknown => {
+export const fromJSONValueHelper = (value: unknown, depth = 0): unknown => {
   if (isObjectRecord(value)) {
     const keys = keysOf(value)
     if (
@@ -18,7 +18,7 @@ export const fromJSONValueHelper = (value: unknown): unknown => {
         const converter = builtinConverters[i]
         if (!converter) continue
         if (converter.matchJSONValue(value)) {
-          return converter.fromJSONValue(value)
+          return converter.fromJSONValue(value, depth)
         }
       }
     }
