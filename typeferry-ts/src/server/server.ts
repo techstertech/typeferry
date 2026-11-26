@@ -28,6 +28,7 @@ import {
   RedisTransport,
   WebSocketTransport,
 } from './transports'
+import type { RedisTransportOptions } from './transports/redis-transport'
 import type { WebSocketTransportOptions } from './transports/websocket-transport'
 
 declare global {
@@ -97,7 +98,9 @@ export type ServerOptions = {
   allowOriginless?: boolean
   debug?: boolean
   ws?: WebSocketTransportOptions & Record<string, unknown>
-  redis?: RedisClientOptions | boolean
+  redis?: RedisTransportOptions | boolean
+  /** Timeout applied to HTTP auth callbacks before failing closed (ms). */
+  authTimeoutMs?: number
   /**
    * Observes Node request metadata and synchronous `data` events without owning
    * transport backpressure. Pausing or reading the observer does not pause Hono.
@@ -192,6 +195,7 @@ export class Server<
     rateLimit = false,
     maxRequestBodySize = DEFAULT_MAX_REQUEST_BODY_SIZE_BYTES,
     requestBodySizeLimits = [],
+    authTimeoutMs,
   }: ServerOptions = {}) {
     super(NO_CHANNEL)
 
@@ -220,6 +224,7 @@ export class Server<
       this.maxRequestBodySize,
       requestBodySizeLimits,
       allowOriginless,
+      authTimeoutMs,
     )
     this.webSocketTransport = new WebSocketTransport(this, origins, ws)
     this.redisTransport = redis ? new RedisTransport(this, redis) : null
@@ -451,6 +456,19 @@ export class Server<
     const channel = new ServerChannel(channelName)
     channel.setServer(this)
     this.channels.set(channelName, channel)
+    return channel
+  }
+
+  /**
+   * Resolves a channel for inbound propagation without inserting unknown names
+   * into `this.channels`, preventing unbounded map allocation.
+   */
+  resolveTransientChannel(name: string): ServerChannel {
+    if (!name || name === NO_CHANNEL) return this
+    const existing = this.channels.get(name)
+    if (existing) return existing
+    const channel = new ServerChannel(name)
+    channel.setServer(this)
     return channel
   }
 }

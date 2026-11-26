@@ -51,6 +51,21 @@ describe('EJSON security hardening', () => {
     expect(() => EJSON.stringify(deepEscapeObj)).toThrow(/depth/i)
   })
 
+  it('caps decoded EJSON $regexp pattern length at 1024 characters', () => {
+    const allowedPattern = 'a'.repeat(1024)
+    const allowed = EJSON.parse(
+      JSON.stringify({ $regexp: allowedPattern, $flags: 'i' }),
+    )
+    expect(allowed).toBeInstanceOf(RegExp)
+    expect((allowed as RegExp).source).toBe(allowedPattern)
+
+    const oversized = JSON.stringify({
+      $regexp: 'a'.repeat(1025),
+      $flags: '',
+    })
+    expect(() => EJSON.parse(oversized)).toThrow(/pattern length/i)
+  })
+
   it('generates RFC 4122 v4 UUIDs via getRandomValues when randomUUID is absent', () => {
     const getRandomValues = globalThis.crypto.getRandomValues.bind(
       globalThis.crypto,

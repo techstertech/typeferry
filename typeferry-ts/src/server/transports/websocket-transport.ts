@@ -4,6 +4,7 @@ import type WebSocket from 'ws'
 import { WebSocketServer } from 'ws'
 
 import {
+  Errors,
   TYPEFERRY_WS_PATH,
   isPongMessage,
   isRpcMessage,
@@ -12,7 +13,11 @@ import {
   ServerEvents,
 } from '../../utils'
 import { ClientNode } from '../client-node'
-import { RoomRegistry } from '../room-registry'
+import {
+  DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
+  RoomRegistry,
+  sendWithinBackpressureLimit,
+} from '../room-registry'
 import type { Server } from '../server'
 import type { TypeFerrySocket } from '../types'
 import { SocketState } from '../types'
@@ -26,6 +31,7 @@ import {
   handleRpc,
   handleRpcVoid,
   parseMeta,
+  sendResponse,
   type WebSocketHandshake,
   type WebSocketHandshakeAuthenticator,
   validateUuid,
@@ -46,14 +52,28 @@ const UPGRADE_NOT_FOUND_RESPONSE =
   'HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
 const UPGRADE_FORBIDDEN_RESPONSE =
   'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
-const DEFAULT_MAX_WS_PAYLOAD_BYTES = 16 * 1024 * 1024
+const DEFAULT_MAX_WS_PAYLOAD_BYTES = 1024 * 1024
+const DEFAULT_MAX_CONCURRENT_RPCS = 64
 
 export interface WebSocketTransportOptions {
   path?: string
   /**
-   * Maximum WebSocket message payload size in bytes (defaults to 16 MiB).
+   * Maximum WebSocket message payload size in bytes (defaults to 1 MiB).
    */
   maxPayload?: number
+  /**
+   * Permits query-string `?token=` authentication (defaults to `true`).
+   * Set to `false` when authentication relies on headers or cookies via `handshakeAuthenticator`.
+   */
+  allowQueryToken?: boolean
+  /**
+   * Maximum concurrent in-flight RPC/void dispatches per connection (defaults to 64).
+   */
+  maxConcurrentRpcs?: number
+  /**
+   * Maximum `bufferedAmount` queued bytes before slow sockets are closed (defaults to 4 MiB).
+   */
+  maxOutboundBufferBytes?: number
   /**
    * Admits an absent Origin under a configured allowlist.
    * This does not change HTTP RPC admission or permit mismatching origins.
@@ -75,21 +95,44 @@ export interface WebSocketTransportOptions {
 export class WebSocketTransport {
   server: Server
   wss: WebSocketServer
-  rooms = new RoomRegistry()
+  rooms: RoomRegistry
 
   private path: string
   private originAllowed: (origin: string | undefined) => boolean
+  private allowQueryToken: boolean
+  private maxConcurrentRpcs: number
+  readonly maxOutboundBufferBytes: number
   private handshakeAuthenticator: WebSocketHandshakeAuthenticator | undefined
   private pingTimers = new Map<TypeFerrySocket, ReturnType<typeof setInterval>>()
   private pongReceived = new Map<TypeFerrySocket, boolean>()
+  private inFlightRpcs = new Map<TypeFerrySocket, number>()
 
   constructor(
     server: Server,
     origins: string[] | undefined,
     opts?: WebSocketTransportOptions,
   ) {
+    if (origins === undefined && process.env.NODE_ENV === 'production') {
+      console.warn(
+        '[TypeFerry] WebSocket transport started without an origins allowlist in production',
+      )
+    }
+    const maxConcurrent = opts?.maxConcurrentRpcs ?? DEFAULT_MAX_CONCURRENT_RPCS
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+      throw new Error('maxConcurrentRpcs must be a positive integer')
+    }
+    const maxOutbound =
+      opts?.maxOutboundBufferBytes ?? DEFAULT_MAX_OUTBOUND_BUFFER_BYTES
+    if (!Number.isFinite(maxOutbound) || maxOutbound <= 0) {
+      throw new Error('maxOutboundBufferBytes must be a positive finite number')
+    }
+
     this.server = server
     this.path = opts?.path ?? TYPEFERRY_WS_PATH
+    this.allowQueryToken = opts?.allowQueryToken ?? true
+    this.maxConcurrentRpcs = maxConcurrent
+    this.maxOutboundBufferBytes = maxOutbound
+    this.rooms = new RoomRegistry({ maxOutboundBufferBytes: maxOutbound })
     this.originAllowed = createOriginChecker(origins, opts?.allowOriginless)
     this.handshakeAuthenticator = opts?.handshakeAuthenticator
 
@@ -173,7 +216,9 @@ export class WebSocketTransport {
     if (this.server.allClients?.has(uuid)) {
       uuid = Presentation.uuid()
     }
-    const token = url.searchParams.get('token') ?? undefined
+    const token = this.allowQueryToken
+      ? (url.searchParams.get('token') ?? undefined)
+      : undefined
     const meta = parseMeta(url.searchParams.get('meta'))
     const handshake: WebSocketHandshake = {
       path: url.pathname,
@@ -208,10 +253,11 @@ export class WebSocketTransport {
     this.server.emit(ServerEvents.CONNECTION, node)
 
     ws.on('message', (raw: Buffer | string) => {
-      this.handleMessage(node, raw)
+      this.handleMessage(node, raw, ws)
     })
 
     ws.on('close', () => {
+      this.inFlightRpcs.delete(ws)
       this.stopPing(ws)
       this.rooms.leaveAll(ws)
       node.close()
@@ -232,21 +278,55 @@ export class WebSocketTransport {
     )
   }
 
-  private handleMessage(node: ClientNode, raw: Buffer | string): void {
+  private handleMessage(
+    node: ClientNode,
+    raw: Buffer | string,
+    ws: WebSocket,
+  ): void {
     try {
       const text = typeof raw === 'string' ? raw : raw.toString('utf8')
       const msg = Presentation.decode<{ t: string }>(text)
 
       if (isRpcMessage(msg)) {
-        void handleRpc(this.server, node, msg.id, msg.method, msg.params).catch(
-          () => undefined,
-        )
+        const current = this.inFlightRpcs.get(ws) ?? 0
+        if (current >= this.maxConcurrentRpcs) {
+          sendResponse(
+            node,
+            msg.id,
+            undefined,
+            Errors.RATE_LIMIT_EXCEEDED,
+            undefined,
+            this.maxOutboundBufferBytes,
+          )
+          return
+        }
+        this.inFlightRpcs.set(ws, current + 1)
+        void handleRpc(this.server, node, msg.id, msg.method, msg.params)
+          .catch(() => undefined)
+          .finally(() => {
+            const remaining = (this.inFlightRpcs.get(ws) ?? 1) - 1
+            if (remaining <= 0) this.inFlightRpcs.delete(ws)
+            else this.inFlightRpcs.set(ws, remaining)
+          })
       } else if (isRpcVoidMessage(msg)) {
-        void handleRpcVoid(this.server, node, msg.method, msg.params).catch(
-          () => undefined,
-        )
-      } else if (isPongMessage(msg) && node.socket) {
-        this.pongReceived.set(node.socket, true)
+        const current = this.inFlightRpcs.get(ws) ?? 0
+        if (current >= this.maxConcurrentRpcs) {
+          console.warn(
+            '[TypeFerry] Concurrent RPC limit exceeded for void call:',
+            msg.method,
+          )
+          return
+        }
+        this.inFlightRpcs.set(ws, current + 1)
+        void handleRpcVoid(this.server, node, msg.method, msg.params)
+          .catch(() => undefined)
+          .finally(() => {
+            const remaining = (this.inFlightRpcs.get(ws) ?? 1) - 1
+            if (remaining <= 0) this.inFlightRpcs.delete(ws)
+            else this.inFlightRpcs.set(ws, remaining)
+          })
+      } else if (isPongMessage(msg)) {
+        this.pongReceived.set(ws, true)
       }
     } catch {
       // Malformed message — ignore
@@ -268,9 +348,11 @@ export class WebSocketTransport {
 
       this.pongReceived.set(ws, false)
 
-      if (ws.readyState === SocketState.OPEN) {
-        ws.send(PING_PAYLOAD)
-      }
+      sendWithinBackpressureLimit(
+        ws,
+        PING_PAYLOAD,
+        this.maxOutboundBufferBytes,
+      )
     }, PING_INTERVAL_MS)
 
     this.pingTimers.set(ws, timer)

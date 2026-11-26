@@ -28,6 +28,7 @@ vi.mock('./ws-shared', () => ({
   handleRpc: vi.fn(),
   handleRpcVoid: vi.fn(),
   parseMeta: vi.fn().mockReturnValue({}),
+  sendResponse: vi.fn(),
   validateUuid: vi.fn().mockReturnValue('test-uuid'),
 }))
 
@@ -48,6 +49,14 @@ vi.mock('../client-node', () => {
 // Mock RoomRegistry
 vi.mock('../room-registry', () => {
   return {
+    DEFAULT_MAX_OUTBOUND_BUFFER_BYTES: 4 * 1024 * 1024,
+    sendWithinBackpressureLimit: vi.fn((ws: any, data: string) => {
+      if (ws.readyState === 1) {
+        ws.send(data)
+        return true
+      }
+      return false
+    }),
     RoomRegistry: class MockRoomRegistry {
       leaveAll = vi.fn()
     },
@@ -55,9 +64,14 @@ vi.mock('../room-registry', () => {
 })
 
 import { WebSocketTransport } from './websocket-transport'
-import { authenticateNode, handleRpc, handleRpcVoid } from './ws-shared'
+import {
+  authenticateNode,
+  handleRpc,
+  handleRpcVoid,
+  sendResponse,
+} from './ws-shared'
 import { ClientNode } from '../client-node'
-import { Presentation, ServerEvents, MessageType } from '../../utils'
+import { Errors, Presentation, ServerEvents, MessageType } from '../../utils'
 import { SocketState } from '../types'
 
 function createMockServer(overrides: Record<string, any> = {}) {
@@ -568,7 +582,6 @@ describe('WebSocketTransport', () => {
       const head = Buffer.alloc(0)
 
       // /typeferry-ws should not match /custom-ws
-      mockWssHandleUpgrade.mockImplementationOnce(() => {})
       upgradeHandler({ url: '/typeferry-ws', headers: {} }, rejectedSocket, head)
       expect(mockWssHandleUpgrade).not.toHaveBeenCalled()
       expect(rejectedSocket.end).toHaveBeenCalled()
@@ -581,6 +594,92 @@ describe('WebSocketTransport', () => {
       )
       upgradeHandler({ url: '/custom-ws', headers: {} }, acceptedSocket, head)
       expect(mockWssHandleUpgrade).toHaveBeenCalled()
+    })
+  })
+
+  describe('P2 hardening options', () => {
+    it('warns in production when origins is omitted', () => {
+      const previousEnv = process.env.NODE_ENV
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      process.env.NODE_ENV = 'production'
+      try {
+        new WebSocketTransport(createMockServer(), undefined)
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('without an origins allowlist'),
+        )
+      } finally {
+        process.env.NODE_ENV = previousEnv
+        warnSpy.mockRestore()
+      }
+    })
+
+    it('omits query ?token= when allowQueryToken is false', () => {
+      const server = createMockServer()
+      new WebSocketTransport(server, undefined, { allowQueryToken: false })
+      const ws = createMockWs()
+
+      triggerConnection(server, ws, {
+        url: '/typeferry-ws?uuid=test-uuid&token=secret-jwt',
+        headers: { cookie: 'session=abc' },
+      })
+
+      expect(authenticateNode).toHaveBeenCalledWith(
+        server,
+        expect.anything(),
+        undefined,
+        undefined,
+        expect.objectContaining({
+          headers: expect.objectContaining({ cookie: 'session=abc' }),
+        }),
+      )
+    })
+
+    it('caps concurrent in-flight RPCs per connection without blocking pong', async () => {
+      const server = createMockServer()
+      new WebSocketTransport(server, undefined, { maxConcurrentRpcs: 2 })
+      const ws = createMockWs()
+      let releaseFirst: (() => void) | undefined
+      vi.mocked(handleRpc)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseFirst = resolve
+            }),
+        )
+        .mockImplementation(() => new Promise<void>(() => {}))
+
+      triggerConnection(server, ws)
+      const messageHandler = ws.on.mock.calls.find(
+        ([event]: [string]) => event === 'message',
+      )![1] as (raw: string) => void
+
+      messageHandler(
+        Presentation.encode({ t: MessageType.RPC, id: '1', method: 'slow' }),
+      )
+      messageHandler(
+        Presentation.encode({ t: MessageType.RPC, id: '2', method: 'slow' }),
+      )
+      messageHandler(
+        Presentation.encode({ t: MessageType.RPC, id: '3', method: 'slow' }),
+      )
+
+      expect(handleRpc).toHaveBeenCalledTimes(2)
+      expect(sendResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        '3',
+        undefined,
+        Errors.RATE_LIMIT_EXCEEDED,
+        undefined,
+        expect.any(Number),
+      )
+
+      // Pong still updates heartbeat even while RPC slots are full.
+      vi.advanceTimersByTime(100)
+      messageHandler(Presentation.encode({ t: MessageType.PONG }))
+      vi.advanceTimersByTime(100)
+      expect(ws.terminate).not.toHaveBeenCalled()
+
+      releaseFirst?.()
     })
   })
 })

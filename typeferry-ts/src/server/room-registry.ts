@@ -1,8 +1,41 @@
 import type { TypeFerrySocket } from './types'
 import { SocketState } from './types'
 
+export const DEFAULT_MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
+
 interface RoomMembership {
   pending: Promise<void>
+}
+
+/**
+ * Checks outbound socket backpressure before queueing a frame. Slow peers whose
+ * send buffer reaches `maxBufferedBytes` are closed instead of buffering
+ * unbounded frames in memory.
+ */
+export function sendWithinBackpressureLimit(
+  ws: TypeFerrySocket,
+  data: string,
+  maxBufferedBytes: number = DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
+): boolean {
+  if (ws.readyState !== SocketState.OPEN) return false
+  if (
+    typeof ws.bufferedAmount === 'number' &&
+    ws.bufferedAmount >= maxBufferedBytes
+  ) {
+    try {
+      ws.close(1008, 'Backpressure limit exceeded')
+    } catch {
+      // Socket may already be closing.
+    }
+    return false
+  }
+  try {
+    ws.send(data)
+    return true
+  } catch {
+    // Socket may close between readyState check and send.
+    return false
+  }
 }
 
 /**
@@ -19,6 +52,21 @@ export class RoomRegistry {
 
   /** socket → set of rooms it has joined (reverse index for fast cleanup) */
   private socketRooms = new Map<TypeFerrySocket, Set<string>>()
+
+  private readonly maxOutboundBufferBytes: number
+
+  constructor(
+    options: { maxOutboundBufferBytes?: number } = {},
+  ) {
+    const limit =
+      options.maxOutboundBufferBytes ?? DEFAULT_MAX_OUTBOUND_BUFFER_BYTES
+    if (!Number.isFinite(limit) || limit <= 0) {
+      throw new Error(
+        'maxOutboundBufferBytes must be a positive finite number',
+      )
+    }
+    this.maxOutboundBufferBytes = limit
+  }
 
   /** Adds a socket to a room. Idempotent. */
   join(ws: TypeFerrySocket, room: string): void {
@@ -78,9 +126,7 @@ export class RoomRegistry {
 
     for (const ws of members.keys()) {
       if (ws === exclude) continue
-      if (ws.readyState === SocketState.OPEN) {
-        ws.send(data)
-      }
+      sendWithinBackpressureLimit(ws, data, this.maxOutboundBufferBytes)
     }
   }
 
@@ -126,7 +172,7 @@ export class RoomRegistry {
           return
         }
 
-        ws.send(data)
+        sendWithinBackpressureLimit(ws, data, this.maxOutboundBufferBytes)
       })
 
       // A failed socket send must not poison the subscription's later work.

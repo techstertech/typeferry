@@ -135,6 +135,25 @@ describe('verifyAccessToken', () => {
     expect(verifyAccessToken('a.b.c', config)).toBeNull()
   })
 
+  it('rejects empty signing secrets on sign and verify', () => {
+    const emptyConfig = makeConfig({ secret: '' })
+    expect(() => signAccessToken(makePayload(), emptyConfig)).toThrow()
+
+    const validToken = signAccessToken(makePayload(), makeConfig())
+    expect(verifyAccessToken(validToken, emptyConfig)).toBeNull()
+  })
+
+  it('rejects tokens whose iat claim is beyond allowed future clock skew', () => {
+    const config = makeConfig()
+    const now = Math.floor(Date.now() / 1000)
+    const token = jwt.sign(
+      makePayload({ iat: now + 60, exp: now + 900 }),
+      config.secret,
+      { algorithm: 'HS256' },
+    )
+    expect(verifyAccessToken(token, config)).toBeNull()
+  })
+
   it('uses default 15 minute maxAge when accessTokenExpiryMinutes is not set', () => {
     const config = makeConfig()
     delete (config as any).accessTokenExpiryMinutes

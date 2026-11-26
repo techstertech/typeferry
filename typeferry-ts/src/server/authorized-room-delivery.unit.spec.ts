@@ -113,4 +113,19 @@ describe('Authorized room delivery', () => {
       if (change === 'rejoin') expect(rooms.has(ws, 'room')).toBe(true)
     },
   )
+
+  it('closes slow sockets exceeding maxOutboundBufferBytes instead of buffering', () => {
+    const rooms = new RoomRegistry({ maxOutboundBufferBytes: 128 })
+    const slow = Object.assign(socket(), { bufferedAmount: 256 })
+    const healthy = Object.assign(socket(), { bufferedAmount: 32 })
+
+    rooms.join(slow, 'room')
+    rooms.join(healthy, 'room')
+
+    rooms.broadcast('room', 'event-payload')
+
+    expect(slow.send).not.toHaveBeenCalled()
+    expect(slow.close).toHaveBeenCalledWith(1008, 'Backpressure limit exceeded')
+    expect(healthy.send).toHaveBeenCalledWith('event-payload')
+  })
 })

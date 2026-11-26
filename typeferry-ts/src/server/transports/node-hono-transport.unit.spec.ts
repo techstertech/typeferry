@@ -476,4 +476,173 @@ describe('NodeHonoTransport', () => {
       clearIntervalSpy.mockRestore()
     }
   })
+
+  it('fails closed when HTTP auth callback exceeds authTimeoutMs', async () => {
+    const server = new Server({
+      globalInstance: false,
+      host: LOCAL_HOST,
+      port: 0,
+      authTimeoutMs: 40,
+    })
+    await server.isReady()
+    server.setAuth({
+      auth: () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ user: { _id: 'slow' } }), 250)
+        }),
+      logIn: () => true,
+    })
+    server.addMethod('secret:ping', () => 'pong', { protected: true })
+    server.app.get(
+      '/protected',
+      server.httpTransport.authMiddleware,
+      (c) => c.text('allowed'),
+    )
+
+    try {
+      const rpcRes = await fetch(`http://${LOCAL_HOST}:${server.port}/__h`, {
+        method: 'POST',
+        headers: { 'x-api-key': 'slow-token' },
+        body: rpcBody('secret:ping'),
+      })
+      expect(rpcRes.status).toBe(200)
+      expect(await rpcRes.text()).toContain('Method Forbidden')
+
+      const mwRes = await fetch(
+        `http://${LOCAL_HOST}:${server.port}/protected`,
+        { headers: { 'x-api-key': 'slow-token' } },
+      )
+      expect(mwRes.status).toBe(403)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('logs a production warning when origins is omitted', async () => {
+    const previousEnv = process.env.NODE_ENV
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    process.env.NODE_ENV = 'production'
+    const server = new Server({
+      globalInstance: false,
+      host: LOCAL_HOST,
+      port: 0,
+    })
+    await server.isReady()
+    try {
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('HTTP transport started without an origins allowlist'),
+      )
+    } finally {
+      process.env.NODE_ENV = previousEnv
+      warnSpy.mockRestore()
+      await server.close()
+    }
+  })
+
+  it('tightens default WS maxPayload to 1 MiB while respecting maxPayload override', async () => {
+    const defaultServer = await createServer()
+    const customServer = new Server({
+      globalInstance: false,
+      host: LOCAL_HOST,
+      port: 0,
+      ws: { maxPayload: 2 * 1024 * 1024 },
+    })
+    await customServer.isReady()
+    customServer.addMethod('echo:size', (params: { data: string }) => params.data.length)
+
+    try {
+      const oversizedFrame = JSON.stringify({
+        t: 'rpc',
+        id: 'big-1',
+        method: 'echo:size',
+        params: { data: 'a'.repeat(1_200_000) },
+      })
+
+      const ws1 = new WebSocket(
+        `ws://${LOCAL_HOST}:${defaultServer.port}/typeferry-ws`,
+      )
+      await new Promise<void>((resolve, reject) => {
+        ws1.once('open', resolve)
+        ws1.once('error', reject)
+      })
+      const closeCode = await new Promise<number>((resolve) => {
+        ws1.once('close', (code) => resolve(code))
+        ws1.send(oversizedFrame)
+      })
+      expect(closeCode).toBe(1009)
+
+      const ws2 = new WebSocket(
+        `ws://${LOCAL_HOST}:${customServer.port}/typeferry-ws`,
+      )
+      await new Promise<void>((resolve, reject) => {
+        ws2.once('open', resolve)
+        ws2.once('error', reject)
+      })
+      const reply = await new Promise<string>((resolve) => {
+        ws2.on('message', (data) => {
+          const text = data.toString()
+          if (text.includes('big-1')) resolve(text)
+        })
+        ws2.send(oversizedFrame)
+      })
+      expect(reply).toContain('1200000')
+      ws2.close()
+    } finally {
+      await defaultServer.close()
+      await customServer.close()
+    }
+  })
+
+  it('disables query token auth when ws.allowQueryToken is false while keeping handshakeAuthenticator', async () => {
+    const server = new Server({
+      globalInstance: false,
+      host: LOCAL_HOST,
+      port: 0,
+      ws: {
+        allowQueryToken: false,
+        handshakeAuthenticator: (_node, handshake) =>
+          handshake.headers.cookie === 'sid=valid'
+            ? { user: { _id: 'cookie-user' } }
+            : false,
+      },
+    })
+    await server.isReady()
+    server.setAuth({
+      auth: (ctx) =>
+        ctx.token === 'query-secret' ? { user: { _id: 'query-user' } } : false,
+      logIn: () => true,
+    })
+    server.addMethod('whoami', function () {
+      return this.userId
+    }, { protected: true })
+
+    try {
+      const wsBlocked = new WebSocket(
+        `ws://${LOCAL_HOST}:${server.port}/typeferry-ws?token=query-secret`,
+      )
+      const authBlocked = await new Promise<boolean>((resolve) => {
+        wsBlocked.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString()) as { t?: string; authenticated?: boolean }
+          if (msg.t === 'auth') resolve(Boolean(msg.authenticated))
+        })
+      })
+      expect(authBlocked).toBe(false)
+      wsBlocked.close()
+
+      const wsCookie = new WebSocket(
+        `ws://${LOCAL_HOST}:${server.port}/typeferry-ws?token=query-secret`,
+        { headers: { cookie: 'sid=valid' } },
+      )
+      const authCookie = await new Promise<boolean>((resolve) => {
+        wsCookie.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString()) as { t?: string; authenticated?: boolean }
+          if (msg.t === 'auth') resolve(Boolean(msg.authenticated))
+        })
+      })
+      expect(authCookie).toBe(true)
+      wsCookie.close()
+    } finally {
+      await server.close()
+    }
+  })
 })

@@ -13,6 +13,10 @@ import {
 import type { ClientNode } from '../client-node'
 import type { ClientNodeContext } from '../client-node'
 import { redactMethodTelemetry, type Method } from '../method'
+import {
+  DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
+  sendWithinBackpressureLimit,
+} from '../room-registry'
 import type { Server } from '../server'
 import { SocketState } from '../types'
 
@@ -45,33 +49,78 @@ export type WebSocketHandshakeAuthenticator = (
 // RPC handling
 // ---------------------------------------------------------------------------
 
+function getMaxOutboundBufferBytes(server: Server): number {
+  const value = (
+    server as { webSocketTransport?: { maxOutboundBufferBytes?: unknown } }
+  ).webSocketTransport?.maxOutboundBufferBytes
+  return typeof value === 'number' ? value : DEFAULT_MAX_OUTBOUND_BUFFER_BYTES
+}
+
 /** Handles an RPC call and sends the response correlated by `id`. */
 export async function handleRpc(
   server: Server,
   node: ClientNode,
   id: string,
   method: string,
-  params?: unknown
+  params?: unknown,
 ): Promise<void> {
+  const maxOutboundBufferBytes = getMaxOutboundBufferBytes(server)
   if (node.limiter && !node.limiter.tryRemoveTokens(1)) {
-    return sendResponse(node, id, undefined, Errors.RATE_LIMIT_EXCEEDED)
+    return sendResponse(
+      node,
+      id,
+      undefined,
+      Errors.RATE_LIMIT_EXCEEDED,
+      undefined,
+      maxOutboundBufferBytes,
+    )
   }
 
   const methodInstance = server.methods.get(method)
 
   if (!methodInstance) {
-    return sendResponse(node, id, undefined, Errors.METHOD_NOT_FOUND)
+    return sendResponse(
+      node,
+      id,
+      undefined,
+      Errors.METHOD_NOT_FOUND,
+      undefined,
+      maxOutboundBufferBytes,
+    )
   }
 
   if (methodInstance.isProtected && !node.authenticated) {
-    return sendResponse(node, id, undefined, Errors.METHOD_FORBIDDEN)
+    return sendResponse(
+      node,
+      id,
+      undefined,
+      Errors.METHOD_FORBIDDEN,
+      undefined,
+      maxOutboundBufferBytes,
+    )
   }
 
   try {
     const result = await methodInstance.exec(params, node)
-    sendResponse(node, id, result)
+    sendResponse(
+      node,
+      id,
+      result,
+      undefined,
+      undefined,
+      maxOutboundBufferBytes,
+    )
   } catch (error) {
-    handleRpcError(server, node, methodInstance, error, id, method, params)
+    handleRpcError(
+      server,
+      node,
+      methodInstance,
+      error,
+      id,
+      method,
+      params,
+      maxOutboundBufferBytes,
+    )
   }
 }
 
@@ -126,7 +175,8 @@ export function sendResponse(
   id: string,
   result?: unknown,
   error?: string,
-  errors?: unknown
+  errors?: unknown,
+  maxOutboundBufferBytes: number = DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
 ): void {
   if (!node.socket || node.socket.readyState !== SocketState.OPEN) return
 
@@ -158,11 +208,7 @@ export function sendResponse(
     }
   }
 
-  try {
-    node.socket.send(encoded)
-  } catch {
-    // Socket may close between readyState check and send.
-  }
+  sendWithinBackpressureLimit(node.socket, encoded, maxOutboundBufferBytes)
 }
 
 function handleRpcError(
@@ -172,10 +218,18 @@ function handleRpcError(
   error: unknown,
   id: string,
   method: string,
-  params: unknown
+  params: unknown,
+  maxOutboundBufferBytes: number = DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
 ): void {
   if (error instanceof PublicError) {
-    return sendResponse(node, id, undefined, error.message)
+    return sendResponse(
+      node,
+      id,
+      undefined,
+      error.message,
+      undefined,
+      maxOutboundBufferBytes,
+    )
   }
 
   if (methodInstance.isSensitive) {
@@ -195,10 +249,24 @@ function handleRpcError(
   })
 
   if (error instanceof SchemaValidationError) {
-    return sendResponse(node, id, undefined, error.message, error.errors)
+    return sendResponse(
+      node,
+      id,
+      undefined,
+      error.message,
+      error.errors,
+      maxOutboundBufferBytes,
+    )
   }
 
-  sendResponse(node, id, undefined, Errors.INTERNAL_ERROR)
+  sendResponse(
+    node,
+    id,
+    undefined,
+    Errors.INTERNAL_ERROR,
+    undefined,
+    maxOutboundBufferBytes,
+  )
 }
 
 // ---------------------------------------------------------------------------

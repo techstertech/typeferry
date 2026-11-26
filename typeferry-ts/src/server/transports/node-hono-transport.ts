@@ -37,6 +37,7 @@ import {
   HttpTransportEvents,
   SERVER_NOT_READY_RESPONSE,
 } from './node-hono-transport-contract'
+import { AUTH_TIMEOUT_MS } from './ws-shared'
 
 /**
  * Node.js HTTP transport backed by a Hono application.
@@ -49,6 +50,7 @@ export class NodeHonoTransport {
   app: Hono
   http: NodeHttpServer | undefined
   private httpRateLimiter: DisposableRateLimiter | undefined
+  private authTimeoutMs: number
 
   constructor(
     server: Server,
@@ -57,8 +59,13 @@ export class NodeHonoTransport {
     maxRequestBodySize: number,
     requestBodySizeLimits: readonly RequestBodySizeLimit[] = [],
     allowOriginless = false,
+    authTimeoutMs: number = AUTH_TIMEOUT_MS,
   ) {
+    if (!Number.isFinite(authTimeoutMs) || authTimeoutMs <= 0) {
+      throw new Error('HTTP authTimeoutMs must be a positive finite number')
+    }
     this.server = server
+    this.authTimeoutMs = authTimeoutMs
     this.app = new Hono()
 
     this.setupMiddleware(
@@ -165,6 +172,12 @@ export class NodeHonoTransport {
     allowOriginless: boolean,
   ): void {
     validateRequestBodyLimits(maxRequestBodySize, requestBodySizeLimits)
+
+    if (origins === undefined && process.env.NODE_ENV === 'production') {
+      console.warn(
+        '[TypeFerry] HTTP transport started without an origins allowlist in production',
+      )
+    }
 
     const originAllowed = createOriginChecker(origins, allowOriginless)
 
@@ -408,9 +421,27 @@ export class NodeHonoTransport {
     }
 
     if (this.server.auth instanceof Function) {
-      let result = this.server.auth.call(clientNode, context)
-      result = result instanceof Promise ? await result : result
-      return result || false
+      const authFn = this.server.auth
+      let authTimer: ReturnType<typeof setTimeout> | undefined
+      const authPromise = Promise.resolve().then(() =>
+        authFn.call(clientNode, context),
+      )
+      // Avoid unhandled rejection if a slow callback rejects after timeout.
+      authPromise.catch(() => undefined)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        authTimer = setTimeout(
+          () => reject(new Error('Auth timeout')),
+          this.authTimeoutMs,
+        )
+      })
+      try {
+        const result = await Promise.race([authPromise, timeoutPromise])
+        return result || false
+      } catch {
+        return false
+      } finally {
+        if (authTimer !== undefined) clearTimeout(authTimer)
+      }
     }
 
     return false

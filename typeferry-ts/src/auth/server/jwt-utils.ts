@@ -2,6 +2,9 @@ import jwt from 'jsonwebtoken'
 
 import type { AccessTokenPayload, AuthConfig } from '../types'
 
+/** Maximum clock skew tolerated for token `iat` claims in seconds. */
+export const JWT_CLOCK_SKEW_SECONDS = 5
+
 /**
  * Sign an access token with the configured algorithm.
  * Always uses explicit algorithm specification to prevent algorithm confusion attacks.
@@ -14,6 +17,9 @@ export function signAccessToken(
   payload: AccessTokenPayload,
   config: AuthConfig,
 ): string {
+  if (typeof config.secret !== 'string' || config.secret.length === 0) {
+    throw new Error('JWT secret must not be empty')
+  }
   const algorithm = config.algorithm ?? 'HS256'
   return jwt.sign(payload, config.secret, { algorithm })
 }
@@ -31,13 +37,23 @@ export function verifyAccessToken(
   config: AuthConfig,
 ): AccessTokenPayload | null {
   try {
+    if (typeof config.secret !== 'string' || config.secret.length === 0) {
+      return null
+    }
     const algorithm = config.algorithm ?? 'HS256'
     const cleanToken = token.replace(/^Bearer\s+/i, '')
 
-    return jwt.verify(cleanToken, config.secret, {
+    const decoded = jwt.verify(cleanToken, config.secret, {
       algorithms: [algorithm],
       maxAge: `${config.accessTokenExpiryMinutes ?? 15}m`,
     }) as AccessTokenPayload
+    if (
+      typeof decoded.iat === 'number' &&
+      decoded.iat > Math.floor(Date.now() / 1000) + JWT_CLOCK_SKEW_SECONDS
+    ) {
+      return null
+    }
+    return decoded
   } catch {
     return null
   }

@@ -5,6 +5,9 @@ import { MAX_EJSON_DEPTH, defineOwnProperty, hasOwn, isInfOrNaN, keysOf, lengthO
 
 type EJSONRecord = Record<string, unknown>
 
+/** Maximum allowed pattern length when deserializing an EJSON `$regexp` tag. */
+export const MAX_REGEXP_PATTERN_LENGTH = 1024
+
 interface CustomEJSONValue {
   typeName(): string
   toJSONValue(): unknown
@@ -60,6 +63,9 @@ export const regexpConverter = {
     fromJSONValue: value => {
       const record = requireRecord(value)
       const pattern = requireString(record['$regexp'])
+      if (pattern.length > MAX_REGEXP_PATTERN_LENGTH) {
+        throw new RangeError('Maximum EJSON RegExp pattern length exceeded')
+      }
       const flags = requireString(record['$flags'])
         .slice(0, 50)
         .replace(/[^gimuy]/g, '')
