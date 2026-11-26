@@ -386,10 +386,17 @@ export class Client<
   }
 
   async logout() {
-    await this.call(Methods.RPC_LOGOUT)
-    this.authenticated = false
-    this.clearContext()
-    this.emit(ClientEvents.LOGOUT, false)
+    try {
+      await this.call(
+        Methods.RPC_LOGOUT,
+        undefined,
+        this.clientSocket.ready ? { httpFallback: false } : {},
+      )
+    } finally {
+      this.authenticated = false
+      this.clearContext()
+      this.emit(ClientEvents.LOGOUT, false)
+    }
   }
 
   async resubscribeAllChannels() {
@@ -737,12 +744,25 @@ export class Client<
     const optionHeaders = new Headers(options.headers)
     const headers = Object.fromEntries(optionHeaders.entries())
     const token = this.context.token
+    const baseOrigin = new URL(this.clientHttp.host).origin
+    let isSameBackendOrigin = false
+    try {
+      const target = new URL(
+        url,
+        typeof window !== 'undefined' ? window.location.origin : baseOrigin,
+      )
+      isSameBackendOrigin = target.origin === baseOrigin
+    } catch {
+      isSameBackendOrigin = false
+    }
 
-    if (typeof token === 'string') headers[TOKEN_HEADER_KEY] = token
+    if (isSameBackendOrigin && typeof token === 'string') {
+      headers[TOKEN_HEADER_KEY] = token
+    }
 
     return fetch(url, {
       ...options,
-      credentials: 'include',
+      ...(isSameBackendOrigin ? { credentials: 'include' as const } : {}),
       headers,
     })
   }

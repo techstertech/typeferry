@@ -160,6 +160,56 @@ describe('MongoLiveEngine registration and ownership', () => {
     expect(server.methods.has(MONGO_LIVE_SUBSCRIBE_METHOD)).toBe(false)
   })
 
+  it('rejects unauthenticated resync on a protected publication even if snapshot was cached', async () => {
+    const server = createServer()
+    servers.push(server)
+    const engine = createEngine(server, {
+      ...publication,
+      protected: true,
+    })
+    const node = new ClientNode(server, createSocket())
+    node.authenticated = true
+    const subscriptions = (engine as unknown as {
+      subscriptions: Map<ClientNode, Map<string, unknown>>
+    }).subscriptions
+    subscriptions.set(
+      node,
+      new Map([
+        [
+          'sub-1',
+          {
+            id: 'sub-1',
+            node,
+            publication: { ...publication, protected: true },
+            args: {},
+            authorization: new AbortController(),
+            supportsOrderedWindows: false,
+            supportsTypedObjectIds: false,
+            observer: { stop: async () => undefined },
+            generation: 'gen-1',
+            stale: true,
+            pressureTimer: null,
+          },
+        ],
+      ]),
+    )
+    const resyncSnapshots = (engine as unknown as {
+      resyncSnapshots: WeakMap<ClientNode, Map<string, unknown>>
+    }).resyncSnapshots
+    resyncSnapshots.set(node, new Map([['sub-1:gen-1', { documents: [] }]]))
+
+    node.authenticated = false
+    const method = server.methods.get('mongo:live:resync')
+
+    await expect(
+      method?.exec(
+        { subscriptionId: 'sub-1', staleGeneration: 'gen-1' },
+        node,
+      ),
+    ).rejects.toThrow('forbidden')
+    await engine.close()
+  })
+
   it('rejects legacy clients before delivering ordered operations', async () => {
     const server = createServer()
     servers.push(server)

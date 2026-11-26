@@ -605,11 +605,12 @@ describe('Client', () => {
 
     it('passes credentials include and token header', async () => {
       client.setContext({ token: 'my-token' })
+      const url = `${client.clientHttp.host}/api`
 
-      await client.fetch('https://example.com/api')
+      await client.fetch(url)
 
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://example.com/api',
+        url,
         expect.objectContaining({
           credentials: 'include',
           headers: expect.objectContaining({
@@ -621,11 +622,12 @@ describe('Client', () => {
 
     it('merges custom options', async () => {
       client.setContext({ token: 'tok' })
+      const url = client.clientHttp.host
 
-      await client.fetch('https://example.com', { method: 'POST' })
+      await client.fetch(url, { method: 'POST' })
 
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://example.com',
+        url,
         expect.objectContaining({
           method: 'POST',
           credentials: 'include',
@@ -1282,6 +1284,58 @@ describe('Client', () => {
     it('combine() returns the same client instance', () => {
       const combined = client.combine({} as any)
       expect(combined).toBe(client)
+    })
+  })
+
+  describe('security hardening: fetch() and logout()', () => {
+    let client: Client
+
+    beforeEach(() => {
+      const storage: Record<string, string> = {}
+      vi.stubGlobal('localStorage', {
+        getItem: vi.fn((key: string) => storage[key] ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage[key] = value
+        }),
+        removeItem: vi.fn((key: string) => {
+          Reflect.deleteProperty(storage, key)
+        }),
+      })
+      client = new Client({ host: 'app.example', port: 443, secure: true })
+    })
+
+    afterEach(async () => {
+      vi.unstubAllGlobals()
+      await client.close().catch(() => undefined)
+    })
+
+    it('attaches x-api-key and credentials only for same-origin backend URLs in fetch()', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response('ok'))
+      vi.stubGlobal('fetch', fetchSpy)
+      client.context = { token: 'secret-jwt' }
+
+      await client.fetch('https://app.example/upload')
+      expect(fetchSpy.mock.calls[0]![1]).toMatchObject({
+        credentials: 'include',
+        headers: { 'x-api-key': 'secret-jwt' },
+      })
+
+      await client.fetch('https://evil.example/steal')
+      expect(fetchSpy.mock.calls[1]![1]).not.toHaveProperty('credentials', 'include')
+      expect(
+        (fetchSpy.mock.calls[1]![1] as { headers: Record<string, string> })
+          .headers['x-api-key'],
+      ).toBeUndefined()
+    })
+
+    it('clears local auth context even if rpc:logout fails', async () => {
+      client.authenticated = true
+      client.context = { token: 'secret-jwt' }
+      vi.spyOn(client, 'call').mockRejectedValue(new Error('Method Forbidden'))
+
+      await expect(client.logout()).rejects.toThrow('Method Forbidden')
+      expect(client.authenticated).toBe(false)
+      expect(client.context).toEqual({})
     })
   })
 })

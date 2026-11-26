@@ -342,6 +342,9 @@ export class MongoLiveEngine {
     const nodeSubscriptions = this.subscriptions.get(node);
     const previous = nodeSubscriptions?.get(request.subscriptionId);
     if (!previous) throw new Error("MongoDB live subscription not found.");
+    if (previous.publication.protected && !node.authenticated) {
+      throw new Error("MongoDB live publication forbidden.");
+    }
     const resyncKey = `${request.subscriptionId}:${request.staleGeneration}`;
     const cached = this.resyncSnapshots.get(node)?.get(resyncKey);
     if (cached) return cached;

@@ -22,6 +22,7 @@ import { signAccessToken } from './jwt-utils'
  */
 export class InMemorySessionManager implements SessionManager {
   private sessions = new Map<string, Session>()
+  private rotatedAtMonotonic = new Map<string, number>()
   private config: AuthConfig
   private cleanupInterval: NodeJS.Timeout
 
@@ -29,6 +30,7 @@ export class InMemorySessionManager implements SessionManager {
     this.config = config
     // Clean up expired and revoked sessions every minute
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000)
+    this.cleanupInterval.unref()
   }
 
   async createSession(
@@ -140,18 +142,30 @@ export class InMemorySessionManager implements SessionManager {
    */
   private handleReusedToken(session: Session): TokenPair | null {
     const graceSeconds = this.config.rotationGracePeriodSeconds ?? 15
-    const now = Date.now()
+    const rotatedMonotonic = this.rotatedAtMonotonic.get(session.token)
+    const elapsedMs =
+      rotatedMonotonic !== undefined
+        ? performance.now() - rotatedMonotonic
+        : session.usedAt !== undefined
+          ? Date.now() - session.usedAt
+          : Number.POSITIVE_INFINITY
 
     // Check if reuse is within grace period from when token was rotated
-    if (!session.usedAt || now - session.usedAt > graceSeconds * 1000) {
+    if (elapsedMs > graceSeconds * 1000) {
       // Token reuse outside grace period indicates theft - revoke entire family
       this.revokeFamily(session.familyId)
       return null
     }
 
-    // Within grace period - return the new token pair
+    // Within grace period - return the new token pair only if replacement is still active and unrotated
     const nextSession = this.sessions.get(session.replacedBy!)
-    if (!nextSession || nextSession.isRevoked) {
+    if (
+      !nextSession ||
+      nextSession.isRevoked ||
+      nextSession.replacedBy ||
+      Date.now() / 1000 > nextSession.expiration
+    ) {
+      if (nextSession?.replacedBy) this.revokeFamily(session.familyId)
       return null
     }
 
@@ -187,6 +201,7 @@ export class InMemorySessionManager implements SessionManager {
     // Mark old token as replaced and record when
     session.replacedBy = newToken
     session.usedAt = Date.now()
+    this.rotatedAtMonotonic.set(session.token, performance.now())
     this.sessions.set(newToken, newSession)
 
     return this.buildTokenPair(newToken, session.userId, newSessionId)
@@ -219,6 +234,7 @@ export class InMemorySessionManager implements SessionManager {
     for (const [key, session] of this.sessions) {
       if (session.isRevoked || session.expiration <= now) {
         this.sessions.delete(key)
+        this.rotatedAtMonotonic.delete(key)
       }
     }
   }
@@ -229,6 +245,7 @@ export class InMemorySessionManager implements SessionManager {
   destroy(): void {
     clearInterval(this.cleanupInterval)
     this.sessions.clear()
+    this.rotatedAtMonotonic.clear()
   }
 
   /**

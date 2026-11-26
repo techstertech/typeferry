@@ -559,5 +559,20 @@ describe('InMemorySessionManager', () => {
       const rotated2 = await manager.refreshSession(session2.refreshToken)
       expect(rotated2).not.toBeNull()
     })
+
+    it('rejects grace-period reuse when the replacement token was already rotated', async () => {
+      const t1 = await manager.createSession('user-1')
+      const t2 = await manager.refreshSession(t1.refreshToken)
+      expect(t2).not.toBeNull()
+
+      vi.advanceTimersByTime(1_000)
+      const t3 = await manager.refreshSession(t2!.refreshToken)
+      expect(t3).not.toBeNull()
+
+      // Replaying t1 inside t1's 15s grace window after t2->t3 rotated must fail and revoke family
+      vi.advanceTimersByTime(1_000)
+      expect(await manager.refreshSession(t1.refreshToken)).toBeNull()
+      expect(await manager.refreshSession(t3!.refreshToken)).toBeNull()
+    })
   })
 })

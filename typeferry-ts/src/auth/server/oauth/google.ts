@@ -30,8 +30,10 @@ export interface GoogleOAuthConfig {
 export class GoogleOAuthProvider implements OAuthProvider {
   readonly name = 'google' as const
   private readonly client: OAuth2Client
+  private readonly clientId: string
 
   constructor(config: GoogleOAuthConfig) {
+    this.clientId = config.clientId
     this.client = new OAuth2Client(
       config.clientId,
       config.clientSecret,
@@ -44,7 +46,10 @@ export class GoogleOAuthProvider implements OAuthProvider {
 
     if (!tokens.id_token) throw new Error('Google did not return an ID token')
 
-    const ticket = await this.client.verifyIdToken({ idToken: tokens.id_token })
+    const ticket = await this.client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: this.clientId,
+    })
 
     const payload = ticket.getPayload()
 

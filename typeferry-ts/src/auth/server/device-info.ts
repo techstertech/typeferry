@@ -26,7 +26,8 @@ export function parseDeviceInfo(req: RequestLike): DeviceInfo {
     return {}
   }
 
-  const uaString = req.headers?.['user-agent']
+  const rawUa = req.headers?.['user-agent']
+  const uaString = rawUa ? rawUa.slice(0, 512) : undefined
   const ip = getIpFromRequest(req)
 
   if (!uaString) {
