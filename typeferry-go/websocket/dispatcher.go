@@ -172,15 +172,20 @@ func (dispatcher *Dispatcher) Receive(ctx context.Context, text string) {
 // prepare keeps parsing, heartbeat and rate admission in incoming frame order.
 // Only the application call and its correlated response run asynchronously.
 func (dispatcher *Dispatcher) prepare(ctx context.Context, text string) func() {
+	work, _ := dispatcher.prepareCall(ctx, text)
+	return work
+}
+
+func (dispatcher *Dispatcher) prepareCall(ctx context.Context, text string) (func(), func()) {
 	frame, err := dispatcher.server.Codec().Parse(text)
 	if err != nil || frame.Kind() != ejson.KindObject {
-		return nil
+		return nil, nil
 	}
 	kind, _ := fieldText(frame, "t")
 	switch kind {
 	case protocol.MessagePing:
 		if dispatcher.limit != nil && !dispatcher.limit.take() {
-			return nil
+			return nil, nil
 		}
 		_ = dispatcher.send(ctx, ejson.Field{Key: "t", Value: ejson.String(protocol.MessagePong)})
 	case protocol.MessagePong:
@@ -191,12 +196,18 @@ func (dispatcher *Dispatcher) prepare(ctx context.Context, text string) func() {
 				id, _ := fieldText(frame, "id")
 				dispatcher.sendFailure(ctx, id, protocol.ErrorRateLimit)
 			}
-			return nil
+			return nil, nil
 		}
 		method, _ := fieldText(frame, "method")
 		params, ok := frame.Lookup("params")
 		if !ok {
 			params = ejson.Null()
+		}
+		reject := func() {
+			if kind == protocol.MessageRPC {
+				id, _ := fieldText(frame, "id")
+				dispatcher.sendFailure(ctx, id, protocol.ErrorRateLimit)
+			}
 		}
 		return func() {
 			// Recovery belongs to the protocol task, including middleware and
@@ -235,9 +246,9 @@ func (dispatcher *Dispatcher) prepare(ctx context.Context, text string) func() {
 				}
 			}
 			_ = dispatcher.send(ctx, fields...)
-		}
+		}, reject
 	}
-	return nil
+	return nil, nil
 }
 
 func (dispatcher *Dispatcher) sendFailure(ctx context.Context, id, message string) {

@@ -215,10 +215,11 @@ type MethodOptions struct {
 }
 
 type cacheEntry struct {
-	value   ejson.Value
-	err     error
-	created time.Time
-	ready   chan struct{}
+	value     ejson.Value
+	err       error
+	created   time.Time
+	ready     chan struct{}
+	discarded bool
 }
 
 type method struct {
@@ -263,6 +264,7 @@ type Server struct {
 	rooms                map[string]map[*Client]struct{}
 	clientRooms          map[*Client]map[string]struct{}
 	channelAuthorization func(*Client, string) bool
+	allowedContextKeys   map[string]struct{}
 	eventPublisher       EventPublisher
 	presenceTracker      PresenceTracker
 	closed               bool
@@ -359,6 +361,56 @@ func (server *Server) AuthenticateValue(ctx context.Context, client *Client, inp
 	return invoke(Handler(auth), ctx, client, input)
 }
 
+func (server *Server) SetAllowedContextKeys(keys []string) {
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		switch key {
+		case "__proto__", "constructor", "prototype", "token", "user":
+			continue
+		default:
+			if key != "" {
+				allowed[key] = struct{}{}
+			}
+		}
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.allowedContextKeys = allowed
+}
+
+func (server *Server) AllowedContextKeys() []string {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	keys := make([]string, 0, len(server.allowedContextKeys))
+	for key := range server.allowedContextKeys {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func (server *Server) FilterContext(value ejson.Value) ejson.Value {
+	if value.Kind() != ejson.KindObject {
+		return ejson.Object()
+	}
+	server.mu.RLock()
+	allowed := server.allowedContextKeys
+	server.mu.RUnlock()
+	if len(allowed) == 0 {
+		return ejson.Object()
+	}
+	filtered := make([]ejson.Field, 0, len(allowed))
+	for _, field := range value.Fields() {
+		switch field.Key {
+		case "__proto__", "constructor", "prototype", "token", "user":
+			continue
+		}
+		if _, ok := allowed[field.Key]; ok {
+			filtered = append(filtered, field)
+		}
+	}
+	return ejson.Object(filtered...)
+}
+
 func (server *Server) OnMethodExecution(listener func(MethodExecution)) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -443,35 +495,43 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 			case <-ctx.Done():
 				return ejson.Null(), ctx.Err()
 			}
-			if cached.err != nil {
-				return ejson.Null(), cached.err
-			}
-			emit(cached.value)
-			return cached.value, nil
-		}
-		if len(entry.cache) >= 1000 {
-			for k, item := range entry.cache {
-				if now.Sub(item.created) >= entry.options.MaxAge {
-					delete(entry.cache, k)
+			entry.mu.Lock()
+			discarded := cached.discarded
+			cachedValue := cached.value
+			cachedErr := cached.err
+			entry.mu.Unlock()
+			if !discarded {
+				if cachedErr != nil {
+					return ejson.Null(), cachedErr
 				}
+				emit(cachedValue)
+				return cachedValue, nil
 			}
+		} else {
 			if len(entry.cache) >= 1000 {
-				var oldestKey string
-				var oldestTime time.Time
 				for k, item := range entry.cache {
-					if oldestKey == "" || item.created.Before(oldestTime) {
-						oldestKey = k
-						oldestTime = item.created
+					if now.Sub(item.created) >= entry.options.MaxAge {
+						delete(entry.cache, k)
 					}
 				}
-				if oldestKey != "" {
-					delete(entry.cache, oldestKey)
+				if len(entry.cache) >= 1000 {
+					var oldestKey string
+					var oldestTime time.Time
+					for k, item := range entry.cache {
+						if oldestKey == "" || item.created.Before(oldestTime) {
+							oldestKey = k
+							oldestTime = item.created
+						}
+					}
+					if oldestKey != "" {
+						delete(entry.cache, oldestKey)
+					}
 				}
 			}
+			pending = &cacheEntry{created: now, ready: make(chan struct{})}
+			entry.cache[key] = pending
+			entry.mu.Unlock()
 		}
-		pending = &cacheEntry{created: now, ready: make(chan struct{})}
-		entry.cache[key] = pending
-		entry.mu.Unlock()
 	}
 
 	result, err := invoke(entry.handler, ctx, client, transformed)
@@ -479,7 +539,9 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 		entry.mu.Lock()
 		pending.value = result
 		pending.err = err
-		if err != nil || client.Authenticated() || ctx.Err() != nil {
+		discard := client.Authenticated() || ctx.Err() != nil
+		pending.discarded = discard
+		if err != nil || discard {
 			if entry.cache[key] == pending {
 				delete(entry.cache, key)
 			}

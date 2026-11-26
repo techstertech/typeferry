@@ -315,3 +315,102 @@ func TestWSMetaDepthLimit(t *testing.T) {
 	}
 	_ = errors.New("")
 }
+
+func TestWSWriteLoopErrorDoesNotDeadlockClose(t *testing.T) {
+	handler := New(runtime.NewServer(), Options{})
+	host := httptest.NewServer(handler)
+	defer host.Close()
+	defer handler.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(host.URL, "http") + "/typeferry-ws"
+	conn, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Close the underlying connection before triggering writeLoop write.
+	_ = conn.CloseNow()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	socket := newConnectionSocket(ctx, conn, cancel)
+	socket.outbound <- `{"t":"ping"}`
+
+	select {
+	case <-socket.writerDone:
+	case <-time.After(time.Second):
+		t.Fatal("writeLoop deadlocked on Close() after write error")
+	}
+	_ = socket.Close()
+}
+
+func TestWSRPCSlotsSaturationDoesNotBlockPingPong(t *testing.T) {
+	server := runtime.NewServer()
+	entered := make(chan struct{}, 64)
+	release := make(chan struct{})
+	if err := server.AddMethod("block", func(ctx context.Context, _ *runtime.Client, _ ejson.Value) (ejson.Value, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return ejson.Bool(true), nil
+		case <-ctx.Done():
+			return ejson.Null(), ctx.Err()
+		}
+	}, runtime.MethodOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := New(server, Options{DisableRateLimit: true})
+	host := httptest.NewServer(handler)
+	defer host.Close()
+	defer func() {
+		close(release)
+		_ = handler.Close()
+	}()
+
+	wsURL := "ws" + strings.TrimPrefix(host.URL, "http") + "/typeferry-ws"
+	conn, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	if _, _, err := conn.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 64 {
+		msg := fmt.Sprintf(`{"t":"rpc","id":"b-%d","method":"block"}`, i)
+		if err := conn.Write(context.Background(), websocket.MessageText, []byte(msg)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 64 {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for 64 RPC slots to fill")
+		}
+	}
+
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"t":"rpc","id":"over","method":"block"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"t":"ping"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRead()
+	var sawOverLimit, sawPong bool
+	for !(sawOverLimit && sawPong) {
+		_, frame, err := conn.Read(readCtx)
+		if err != nil {
+			t.Fatalf("stalled waiting for pong/overload frame (limit=%v pong=%v): %v", sawOverLimit, sawPong, err)
+		}
+		text := string(frame)
+		if strings.Contains(text, `"id":"over"`) && strings.Contains(text, `"Rate Limit Exceeded"`) {
+			sawOverLimit = true
+		}
+		if strings.Contains(text, `"t":"pong"`) {
+			sawPong = true
+		}
+	}
+}

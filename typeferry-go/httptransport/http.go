@@ -2,6 +2,7 @@
 package httptransport
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -14,15 +15,17 @@ import (
 	"time"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
+	authidentity "github.com/leonardoventurini/typeferry/typeferry-go/internal/identity"
 	"github.com/leonardoventurini/typeferry/typeferry-go/protocol"
 	"github.com/leonardoventurini/typeferry/typeferry-go/runtime"
 )
 
 const (
-	defaultBodyLimit  = 4 * 1024 * 1024
-	defaultRateMax    = 120
-	defaultRateWindow = time.Minute
-	maxLimiterEntries = 100_000
+	defaultBodyLimit   = 4 * 1024 * 1024
+	defaultRateMax     = 120
+	defaultRateWindow  = time.Minute
+	defaultAuthTimeout = 5 * time.Second
+	maxLimiterEntries  = 100_000
 )
 
 var validClientID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
@@ -36,6 +39,7 @@ type Options struct {
 	DisableRateLimit bool
 	RateLimitMax     int
 	RateLimitWindow  time.Duration
+	AuthTimeout      time.Duration
 	ClientAddress    func(*http.Request) string
 }
 
@@ -68,7 +72,7 @@ func (limit *limiter) consume(key string) (bool, int, time.Duration) {
 	limit.mu.Lock()
 	defer limit.mu.Unlock()
 	now := time.Now()
-	if limit.lastSweep.IsZero() || now.Sub(limit.lastSweep) >= limit.window || len(limit.entries) >= maxLimiterEntries {
+	if limit.lastSweep.IsZero() || now.Sub(limit.lastSweep) >= limit.window {
 		limit.sweepLocked(now)
 	}
 	old := limit.entries[key]
@@ -112,6 +116,9 @@ func New(server *runtime.Server, options Options) *Handler {
 	}
 	if options.RateLimitWindow <= 0 {
 		options.RateLimitWindow = defaultRateWindow
+	}
+	if options.AuthTimeout <= 0 {
+		options.AuthTimeout = defaultAuthTimeout
 	}
 	var origins map[string]struct{}
 	if options.Origins != nil {
@@ -237,22 +244,24 @@ func (handler *Handler) dispatch(response http.ResponseWriter, request *http.Req
 	headers := make(map[string]string, len(request.Header))
 	for name, values := range request.Header {
 		if len(values) > 0 {
-			if strings.EqualFold(name, "Cookie") {
-				headers[name] = strings.Join(values, "; ")
+			lower := strings.ToLower(name)
+			if lower == "cookie" {
+				headers[lower] = strings.Join(values, "; ")
 			} else {
-				headers[name] = values[0]
+				headers[lower] = strings.Join(values, ", ")
 			}
 		}
 	}
 	client.SetRequestMetadata(headers, address, request.UserAgent())
-	authInput, ok := transport.Lookup("context")
-	if !ok || authInput.Kind() != ejson.KindObject {
-		authInput = ejson.Object()
+	rawContext, ok := transport.Lookup("context")
+	if !ok {
+		rawContext = ejson.Object()
 	}
+	authInput := handler.server.FilterContext(rawContext)
 	if token := request.Header.Get("X-Api-Key"); token != "" && token != "undefined" {
 		authInput = setField(authInput, "token", ejson.String(strings.TrimPrefix(token, "Bearer ")))
 	}
-	if err := handler.server.Authenticate(request.Context(), client, authInput); err != nil {
+	if err := handler.authenticate(request.Context(), client, authInput); err != nil {
 		flushResponseHeaders(response, client)
 		handler.writeError(response, protocol.ErrorInternal, "", "", nil, isVoid)
 		return
@@ -350,6 +359,39 @@ func setField(object ejson.Value, key string, value ejson.Value) ejson.Value {
 		}
 	}
 	return ejson.Object(append(fields, ejson.Field{Key: key, Value: value})...)
+}
+
+type authOutcome struct {
+	identity ejson.Value
+	err      error
+}
+
+func (handler *Handler) authenticate(ctx context.Context, client *runtime.Client, input ejson.Value) error {
+	authCtx, cancel := context.WithTimeout(ctx, handler.options.AuthTimeout)
+	defer cancel()
+	done := make(chan authOutcome, 1)
+	go func() {
+		identity, err := handler.server.AuthenticateValue(authCtx, client, input)
+		done <- authOutcome{identity: identity, err: err}
+	}()
+	select {
+	case outcome := <-done:
+		if outcome.err != nil {
+			client.SetAuthenticated(false)
+			client.SetContext(ejson.Null())
+			return outcome.err
+		}
+		authenticated := authidentity.Accepted(outcome.identity)
+		client.SetAuthenticated(authenticated)
+		if authenticated {
+			client.SetContext(outcome.identity)
+		} else {
+			client.SetContext(ejson.Null())
+		}
+		return nil
+	case <-authCtx.Done():
+		return authCtx.Err()
+	}
 }
 
 func intString(value int) string { return strconv.Itoa(value) }

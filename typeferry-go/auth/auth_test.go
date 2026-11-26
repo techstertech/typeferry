@@ -152,4 +152,26 @@ func TestGraceReuseRejectsSupersededAndExpiredReplacement(t *testing.T) {
 	if _, err := m2.RefreshSession(s1.RefreshToken, nil); err == nil {
 		t.Fatal("grace reuse accepted expired replacement session")
 	}
+
+	// Multi-hop family revocation: s0 -> s1 -> s2; replaying s0 within grace must revoke s2 too.
+	hopNow := time.Unix(1_700_000_000, 0)
+	hm, err := NewInMemorySessionManager(Config{
+		Secret:              []byte("0123456789abcdef0123456789abcdef"),
+		Algorithm:           HS256,
+		AccessTokenExpiry:   time.Minute,
+		RefreshTokenExpiry:  time.Hour,
+		RotationGracePeriod: 30 * time.Second,
+	}, func() time.Time { return hopNow })
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs0, _ := hm.CreateSession("u-hop", nil)
+	hs1, _ := hm.RefreshSession(hs0.RefreshToken, nil)
+	hs2, _ := hm.RefreshSession(hs1.RefreshToken, nil)
+	if _, err := hm.RefreshSession(hs0.RefreshToken, nil); err == nil {
+		t.Fatal("expected multi-hop replay within grace to fail")
+	}
+	if _, err := hm.RefreshSession(hs2.RefreshToken, nil); err == nil {
+		t.Fatal("expected descendant session s2 to be revoked after s0 replay")
+	}
 }

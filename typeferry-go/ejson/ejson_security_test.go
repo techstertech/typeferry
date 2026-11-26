@@ -70,3 +70,22 @@ func TestDeepBinaryNoQuadraticClone(t *testing.T) {
 		t.Fatalf("deep binary decode too slow: %s", time.Since(start))
 	}
 }
+
+func TestNestedEscapeRespectsMaxDepth(t *testing.T) {
+	codec := NewCodec()
+	deepEscape := strings.Repeat(`{"$escape":`, 130) + `{"$date":0}` + strings.Repeat("}", 130)
+	if _, err := codec.Parse(deepEscape); err == nil {
+		t.Fatal("expected Parse to reject nested $escape exceeding maxEJSONDepth")
+	}
+
+	val := Object(Field{Key: "$date", Value: Int(0)})
+	for range 128 {
+		val = Object(Field{Key: "$escape", Value: val})
+	}
+	if _, err := codec.decodeValue(val, 0); err == nil {
+		t.Fatal("expected decodeValue to reject nested $escape exceeding maxEJSONDepth")
+	}
+	if _, err := codec.Stringify(val, false); err == nil {
+		t.Fatal("expected Stringify to reject nested $escape exceeding maxEJSONDepth")
+	}
+}

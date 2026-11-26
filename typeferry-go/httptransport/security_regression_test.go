@@ -75,3 +75,75 @@ func TestHTTPLimiterEvictsExpiredEntries(t *testing.T) {
 		t.Fatal("expired limiter entry old-1 was not evicted")
 	}
 }
+
+func TestHTTPContextAllowlistHeadersTimeoutAndChunkedLimit(t *testing.T) {
+	server := runtime.NewServer()
+	server.SetAllowedContextKeys([]string{"locale"})
+	var seenRole, seenLocale, seenToken, seenCustomHeader string
+	if err := server.SetAuth(func(_ context.Context, client *runtime.Client, value ejson.Value) (ejson.Value, error) {
+		role, _ := value.Lookup("role")
+		seenRole, _ = role.Text()
+		locale, _ := value.Lookup("locale")
+		seenLocale, _ = locale.Text()
+		tok, _ := value.Lookup("token")
+		seenToken, _ = tok.Text()
+		seenCustomHeader = client.Header("x-custom")
+		return value, nil
+	}, func(context.Context, *runtime.Client, ejson.Value) (ejson.Value, error) {
+		return ejson.Null(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.AddMethod("ok", func(context.Context, *runtime.Client, ejson.Value) (ejson.Value, error) {
+		return ejson.Bool(true), nil
+	}, runtime.MethodOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New(server, Options{DisableRateLimit: true})
+	req := httptest.NewRequest(http.MethodPost, protocol.HTTPPath, strings.NewReader(`{"context":{"role":"admin","locale":"en","token":"spoof"},"payload":{"method":"ok"}}`))
+	req.Header.Set("X-Api-Key", "Bearer real-tok")
+	req.Header["X-Custom"] = []string{"one", "two"}
+	resp := httptest.NewRecorder()
+	app.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || seenRole != "" || seenLocale != "en" || seenToken != "real-tok" {
+		t.Fatalf("context leakage or token mismatch: role=%q locale=%q token=%q", seenRole, seenLocale, seenToken)
+	}
+	if seenCustomHeader != "one, two" {
+		t.Fatalf("multi-value header = %q, want %q", seenCustomHeader, "one, two")
+	}
+
+	slowServer := runtime.NewServer()
+	_ = slowServer.SetAuth(func(ctx context.Context, _ *runtime.Client, _ ejson.Value) (ejson.Value, error) {
+		<-time.After(500 * time.Millisecond)
+		return ejson.Object(), nil
+	}, func(context.Context, *runtime.Client, ejson.Value) (ejson.Value, error) {
+		return ejson.Null(), nil
+	})
+	_ = slowServer.AddMethod("ok", func(context.Context, *runtime.Client, ejson.Value) (ejson.Value, error) {
+		return ejson.Bool(true), nil
+	}, runtime.MethodOptions{})
+	timedApp := New(slowServer, Options{DisableRateLimit: true, AuthTimeout: 40 * time.Millisecond})
+	timeoutResp := httptest.NewRecorder()
+	start := time.Now()
+	timedApp.ServeHTTP(timeoutResp, httptest.NewRequest(http.MethodPost, protocol.HTTPPath, strings.NewReader(`{"payload":{"method":"ok"}}`)))
+	if time.Since(start) > 300*time.Millisecond || !strings.Contains(timeoutResp.Body.String(), protocol.ErrorInternal) {
+		t.Fatalf("auth timeout did not return Internal Error quickly: dur=%s body=%s", time.Since(start), timeoutResp.Body.String())
+	}
+
+	chunkHost := httptest.NewServer(New(server, Options{DisableRateLimit: true, MaxBodyBytes: 64}))
+	defer chunkHost.Close()
+	chunkReq, err := http.NewRequest(http.MethodPost, chunkHost.URL+protocol.HTTPPath, struct{ *strings.Reader }{strings.NewReader(strings.Repeat("a", 128))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkReq.ContentLength = -1 // forces chunked transfer encoding
+	chunkResp, err := chunkHost.Client().Do(chunkReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = chunkResp.Body.Close()
+	if chunkResp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked oversized status = %d, want 413", chunkResp.StatusCode)
+	}
+}

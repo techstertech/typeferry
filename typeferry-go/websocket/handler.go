@@ -200,7 +200,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 			if ctx.Err() != nil {
 				return
 			}
-			if work := dispatcher.prepare(ctx, text); work != nil {
+			if work, reject := dispatcher.prepareCall(ctx, text); work != nil {
 				select {
 				case rpcSlots <- struct{}{}:
 					if ctx.Err() != nil {
@@ -217,6 +217,10 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 					}()
 				case <-ctx.Done():
 					return
+				default:
+					if reject != nil {
+						reject()
+					}
 				}
 			}
 		case <-ctx.Done():
@@ -297,12 +301,17 @@ func (socket *connectionSocket) writeLoop(ctx context.Context) {
 		select {
 		case <-socket.closed:
 			return
+		default:
+		}
+		select {
+		case <-socket.closed:
+			return
 		case message := <-socket.outbound:
 			writeCtx, cancel := context.WithTimeout(ctx, socketWriteTimeout)
 			err := socket.connection.Write(writeCtx, websocket.MessageText, []byte(message))
 			cancel()
 			if err != nil {
-				_ = socket.Close()
+				socket.closeNoWait()
 				return
 			}
 		}
@@ -325,17 +334,21 @@ func (socket *connectionSocket) SendText(ctx context.Context, message string) er
 	case socket.outbound <- message:
 		return nil
 	default:
-		_ = socket.Close()
+		socket.closeNoWait()
 		return errors.New("websocket outbound queue full")
 	}
 }
 
-func (socket *connectionSocket) Close() error {
+func (socket *connectionSocket) closeNoWait() {
 	socket.once.Do(func() {
 		close(socket.closed)
 		socket.cancel()
 		socket.closeErr = socket.connection.CloseNow()
 	})
+}
+
+func (socket *connectionSocket) Close() error {
+	socket.closeNoWait()
 	<-socket.writerDone
 	return socket.closeErr
 }

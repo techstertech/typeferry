@@ -23,8 +23,9 @@ type Client struct {
 	done           chan struct{}
 	presenceNotify chan struct{}
 	presenceDone   chan struct{}
-	mu             sync.Mutex
-	closed         bool
+	presenceMu     sync.Mutex
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func Connect(ctx context.Context, server *runtime.Server, options *redis.Options) (*Client, error) {
@@ -92,24 +93,20 @@ func (client *Client) listen(ctx context.Context) {
 }
 
 func (client *Client) Close() error {
-	client.mu.Lock()
-	if client.closed {
-		client.mu.Unlock()
-		return nil
-	}
-	client.closed = true
-	client.mu.Unlock()
-	client.cancel()
-	client.adapter.server.SetEventPublisher(nil)
-	client.server.SetPresenceTracker(nil)
-	first := client.sub.Close()
-	<-client.done
-	<-client.presenceDone
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cleanup := client.pub.Del(ctx, client.clientsKey(), client.usersKey()).Err()
-	remove := client.pub.SRem(ctx, "typeferry:servers", client.server.ID()).Err()
-	return errors.Join(first, cleanup, remove, client.pub.Close())
+	client.closeOnce.Do(func() {
+		client.cancel()
+		client.adapter.server.SetEventPublisher(nil)
+		client.server.SetPresenceTracker(nil)
+		first := client.sub.Close()
+		<-client.done
+		<-client.presenceDone
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cleanup := client.pub.Del(ctx, client.clientsKey(), client.usersKey()).Err()
+		remove := client.pub.SRem(ctx, "typeferry:servers", client.server.ID()).Err()
+		client.closeErr = errors.Join(first, cleanup, remove, client.pub.Close())
+	})
+	return client.closeErr
 }
 
 func (client *Client) clientsKey() string { return "typeferry:clients:" + client.server.ID() }
@@ -141,6 +138,8 @@ func (client *Client) presenceLoop(ctx context.Context) {
 }
 
 func (client *Client) syncPresenceSnapshot(ctx context.Context) {
+	client.presenceMu.Lock()
+	defer client.presenceMu.Unlock()
 	snapshot := client.server.ClientSnapshot()
 	users := make(map[string]struct{})
 	pipe := client.pub.TxPipeline()
@@ -165,6 +164,7 @@ type Stats struct {
 }
 
 func (client *Client) Stats(ctx context.Context) (Stats, error) {
+	client.syncPresenceSnapshot(ctx)
 	servers, err := client.pub.SMembers(ctx, "typeferry:servers").Result()
 	if err != nil {
 		return Stats{}, err

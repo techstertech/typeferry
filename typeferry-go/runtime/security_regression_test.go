@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
 	"github.com/leonardoventurini/typeferry/typeferry-go/protocol"
@@ -292,5 +293,55 @@ func TestMethodCacheEvictsErrorsCanceledAndBoundsSize(t *testing.T) {
 	}
 	if len(server.methods["bounded"].cache) > 1000 {
 		t.Fatalf("cache grew unboundedly: %d entries", len(server.methods["bounded"].cache))
+	}
+}
+
+func TestCacheCoalescedWaiterIgnoresElevatedLeaderAndLogoutClearsAuthFirst(t *testing.T) {
+	server := NewServer()
+	leaderEntered := make(chan struct{})
+	releaseLeader := make(chan struct{})
+	callNum := 0
+	var mu sync.Mutex
+	if err := server.AddMethod("coalesce", func(_ context.Context, c *Client, _ ejson.Value) (ejson.Value, error) {
+		mu.Lock()
+		callNum++
+		n := callNum
+		mu.Unlock()
+		if n == 1 {
+			close(leaderEntered)
+			<-releaseLeader
+			c.SetAuthenticated(true)
+			return ejson.String("leader-elevated-secret"), nil
+		}
+		return ejson.String("anon-safe"), nil
+	}, MethodOptions{Cache: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	leader := NewClient("leader")
+	waiter := NewClient("waiter")
+	leaderDone := make(chan ejson.Value, 1)
+	waiterDone := make(chan ejson.Value, 1)
+
+	go func() {
+		v, _ := server.Call(context.Background(), "coalesce", ejson.String("k"), leader)
+		leaderDone <- v
+	}()
+	<-leaderEntered
+	go func() {
+		v, _ := server.Call(context.Background(), "coalesce", ejson.String("k"), waiter)
+		waiterDone <- v
+	}()
+	// Wait until waiter reaches <-cached.ready before releasing leader.
+	time.Sleep(25 * time.Millisecond)
+	close(releaseLeader)
+
+	lv := <-leaderDone
+	wv := <-waiterDone
+	if ls, _ := lv.Text(); ls != "leader-elevated-secret" {
+		t.Fatalf("leader got %q", ls)
+	}
+	if ws, _ := wv.Text(); ws != "anon-safe" {
+		t.Fatalf("coalesced waiter received elevated leader result %q", ws)
 	}
 }

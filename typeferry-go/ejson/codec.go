@@ -161,13 +161,16 @@ func (codec *Codec) decodeValue(value Value, depth int) (Value, error) {
 			return Value{}, errors.New("EJSON nesting depth exceeds maximum")
 		}
 		if hasKeys(value.fields, "$escape") {
+			if depth+1 >= maxEJSONDepth {
+				return Value{}, errors.New("EJSON nesting depth exceeds maximum")
+			}
 			inner := value.fields[0].Value
 			if inner.kind != KindObject {
 				return Value{}, errors.New("$escape value must be an object")
 			}
 			fields := make([]Field, 0, len(inner.fields))
 			for _, field := range inner.fields {
-				decoded, err := codec.decodeValue(field.Value, depth+1)
+				decoded, err := codec.decodeValue(field.Value, depth+2)
 				if err != nil {
 					return Value{}, err
 				}
@@ -347,16 +350,16 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool, dept
 		}
 		output.WriteByte(']')
 	case KindObject:
+		if depth >= maxEJSONDepth {
+			return errors.New("EJSON nesting depth exceeds maximum")
+		}
 		if tagShape(value.fields) && !escaped {
 			output.WriteString(`{"$escape":`)
-			if err := writeValue(output, value, canonical, true, depth); err != nil {
+			if err := writeValue(output, value, canonical, true, depth+1); err != nil {
 				return err
 			}
 			output.WriteByte('}')
 			return nil
-		}
-		if depth >= maxEJSONDepth {
-			return errors.New("EJSON nesting depth exceeds maximum")
 		}
 		fields := orderedFields(value.fields, canonical)
 		output.WriteByte('{')

@@ -1,6 +1,10 @@
 package auth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestParseDeviceInfo(t *testing.T) {
 	examples := []struct{ agent, os, browser, kind string }{
@@ -22,5 +26,13 @@ func TestParseDeviceInfo(t *testing.T) {
 	bounded := ParseDeviceInfo(map[string]string{"user-agent": string(hugeUA)}, "198.51.100.2")
 	if len(bounded.UserAgent) > 512 {
 		t.Fatalf("UserAgent length = %d, want <= 512", len(bounded.UserAgent))
+	}
+
+	multiByteUA := strings.Repeat("é", 300) // 600 bytes (2 bytes per rune) -> slicing byte 511/512 could split rune if misaligned; test with odd offset!
+	multiByteOffset := "a" + strings.Repeat("é", 300)
+	utf8Safe := ParseDeviceInfo(map[string]string{"user-agent": multiByteOffset}, "198.51.100.2")
+	_ = multiByteUA
+	if !utf8.ValidString(utf8Safe.UserAgent) {
+		t.Fatalf("UserAgent truncated mid-rune: invalid UTF-8")
 	}
 }

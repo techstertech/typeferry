@@ -397,11 +397,13 @@ func (server *Server) installDefaultMethods() {
 		return server.subscriptionResult(client, params, false), nil
 	}, MethodOptions{})
 	_ = server.AddMethod(protocol.MethodLogout, func(_ context.Context, client *Client, _ ejson.Value) (ejson.Value, error) {
+		// Clear auth before evicting rooms so concurrent rpc:on post-checks see
+		// authenticated == false if racing with leaveAllLocked.
+		client.SetAuthenticated(false)
+		client.SetContext(ejson.Null())
 		server.mu.Lock()
 		server.leaveAllLocked(client)
 		server.mu.Unlock()
-		client.SetAuthenticated(false)
-		client.SetContext(ejson.Null())
 		server.RefreshClientPresence(client)
 		return ejson.Bool(true), nil
 	}, MethodOptions{Protected: true})

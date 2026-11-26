@@ -65,6 +65,9 @@ func (manager *InMemorySessionManager) CreateSession(userID string, device *Devi
 }
 
 func (manager *InMemorySessionManager) createLocked(userID, familyID string, device *DeviceInfo) (TokenPair, error) {
+	if len(manager.sessions) >= 10000 {
+		manager.pruneExpiredLocked()
+	}
 	token, err := randomID()
 	if err != nil {
 		return TokenPair{}, err
@@ -104,12 +107,10 @@ func (manager *InMemorySessionManager) RefreshSession(token string, device *Devi
 		}
 		replacement := manager.sessions[session.ReplacedBy]
 		if replacement == nil || replacement.Revoked || replacement.ReplacedBy != "" || manager.now().After(replacement.Expiration) {
+			manager.revokeFamilyLocked(session.FamilyID)
 			return TokenPair{}, errors.New("replacement session is unavailable")
 		}
 		return manager.pairLocked(replacement)
-	}
-	if len(manager.sessions) >= 10000 {
-		manager.pruneExpiredLocked()
 	}
 	pair, err := manager.createLocked(session.UserID, session.FamilyID, device)
 	if err != nil {

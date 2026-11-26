@@ -21,10 +21,7 @@ func ParseDeviceInfo(headers map[string]string, remoteAddress string) DeviceInfo
 	info := DeviceInfo{IP: remoteAddress}
 	for name, value := range headers {
 		if strings.ToLower(name) == "user-agent" {
-			if len(value) > 512 {
-				value = value[:512]
-			}
-			info.UserAgent = value
+			info.UserAgent = truncateUTF8(value, 512)
 		}
 	}
 	if info.UserAgent == "" {
@@ -91,4 +88,18 @@ func desktopBrowser(agent string) string {
 		}
 	}
 	return ""
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	end := 0
+	for index := range value {
+		if index > maxBytes {
+			break
+		}
+		end = index
+	}
+	return value[:end]
 }
