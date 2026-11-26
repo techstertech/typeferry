@@ -223,10 +223,17 @@ Source: `typeferry-ts/src/server/transports/hono-rate-limit.ts`.
 | Param  | Type   | Required | Constraint                                    |
 |--------|--------|----------|-----------------------------------------------|
 | `uuid` | string | no       | 1–64 ASCII chars from `[a-zA-Z0-9-]`; valid unused values remain unchanged; missing, invalid, or actively colliding values on unauthenticated handshakes receive a fresh random UUID |
-| `token`| string | no       | auth bearer token; omission means unauthenticated |
+| `token`| string | no       | auth bearer token; omission means unauthenticated (servers MAY opt out via `allowQueryToken: false` / `DisableQueryToken`) |
 | `meta` | string | no       | JSON-encoded object; MUST NOT exceed 10 000 bytes; invalid or oversize values MUST be normalized to `{}` |
 
 Sources: `src/server/transports/ws-shared.ts:17-20,204-240`.
+
+Deployments SHOULD configure explicit `origins` in production; when omitted,
+implementations permit all origins and SHOULD emit a startup warning in
+production environments. Implementations MAY provide an opt-out disabling
+query-string `?token=` authentication (`allowQueryToken: false` /
+`DisableQueryToken: true`) while preserving application-owned handshake
+authentication.
 
 Invalid UUIDs MUST NOT be repaired by deleting characters, because that can
 alias another client's identity. An unauthenticated handshake supplying a `uuid`
@@ -277,7 +284,9 @@ absent, the token behavior in section 2.2.2 remains unchanged.
 
 Sources: `src/server/transports/ws-shared.ts:17-23,164-197`,
 `src/server/transports/websocket-transport.ts:175-185`,
-`src/server/transports/bun-ws-transport.ts:140`.
+`src/server/transports/bun-ws-transport.ts:140`. Across language ports,
+`WebSocketHandshakeAuthenticator` parity is available on TypeScript, Go, Python,
+and Rust WebSocket transports.
 
 #### 2.2.3 Close codes
 
@@ -303,12 +312,32 @@ Source: `src/server/transports/redis-transport.ts:54-62,82-91`,
 
 ```ts
 {
-  event: string,          // event name
-  channel: string,        // channel name; "NO_CHANNEL" when unscoped
-  message: string,        // pre-encoded EventMessage JSON (section 5.2.2)
+  event: string,          // non-empty event name
+  channel: string,        // channel name; "NO_CHANNEL" when unscoped or omitted
+  message: string,        // non-empty pre-encoded EventMessage JSON (section 5.2.2)
   excludeUuid?: string,   // originator uuid to exclude (optional)
+  sig?: string,           // optional lowercase hex HMAC-SHA256 when signingSecret is set
 }
 ```
+
+Inbound listeners MUST validate envelope field types strictly (ignoring
+non-object envelopes, non-string/empty `event` or `message`, or non-string
+optional `channel`/`excludeUuid` fields) and MUST NOT allocate unbounded
+per-channel server state for unknown channels.
+
+When `signingSecret` is configured (non-empty), publishers MUST attach `"sig"`
+computed as lowercase hex `HMAC-SHA256` with the UTF-8 secret over:
+
+```text
+{byteLen(event)}:{event}|{byteLen(channel)}:{channel}|{byteLen(message)}:{message}|{byteLen(excludeUuid)}:{excludeUuid}
+```
+
+where `byteLen(s)` is the base-10 UTF-8 byte length of `s`, `channel` is
+normalized (`"NO_CHANNEL"` if empty/omitted), and `excludeUuid` defaults to `""`
+when omitted. Receiving instances configured with `signingSecret` MUST verify
+`"sig"` using constant-time comparison and discard unsigned or invalid frames.
+When `signingSecret` is unset, `"sig"` is omitted and existing unsigned frames
+remain valid.
 
 **Redis keys** (`src/server/transports/redis-transport.ts:96-97,112-118`):
 
@@ -344,7 +373,7 @@ round-trip every form listed below exactly as the TS implementation does
 | Native value       | JSON form                                    | Notes |
 |--------------------|----------------------------------------------|-------|
 | `Date`             | `{"$date": <ms since epoch, integer>}`       | Full JS date interval, inclusive of ±8640000000000000 ms; invalid dates encode their NaN time as JSON null |
-| `RegExp`           | `{"$regexp": <source>, "$flags": <flags>}`   | On decode, flags are filtered to `[gimuy]`, deduplicated, capped at 50 chars (`built-in-converters.ts:32-49`) |
+| `RegExp`           | `{"$regexp": <source>, "$flags": <flags>}`   | On decode, flags are filtered to `[gimuy]`, deduplicated, capped at 50 chars (`built-in-converters.ts:32-49`); JS/TS caps `$regexp` pattern length at 1024 characters |
 | `NaN`              | `{"$InfNaN": 0}`                              | (`built-in-converters.ts:58-71`) |
 | `Infinity`         | `{"$InfNaN": 1}`                              | |
 | `-Infinity`        | `{"$InfNaN": -1}`                             | |
@@ -674,6 +703,11 @@ where `time` is `performance.now()` delta in milliseconds. Not on the
 wire; observable only to server-side listeners
 (`src/server/method.ts:195-202`).
 
+When `MethodOptions.sensitive` is `true`, telemetry (`method:execution` and
+`method:error`) MUST redact `params`, `result`, and `error` to `"[REDACTED]"`,
+and server error logs MUST omit raw parameter/exception values across TS, Go,
+Python, and Rust.
+
 ---
 
 ## 7. Default methods
@@ -904,13 +938,14 @@ Source: `src/server/event.ts:6-36,64-81`.
 | `cluster`           | Propagates via Redis pub/sub (section 2.3)                             |
 | `excludeOriginator` | When true, uses `params.uuid` to identify and exclude the emitter      |
 
-The TypeScript server additionally supports the opt-in authoring option
-`revalidateOnDelivery` (default false). It repeats current authentication,
+TypeScript, Go, Python, and Rust servers additionally support the opt-in authoring
+option `revalidateOnDelivery` (`RevalidateOnDelivery` / `revalidate_on_delivery`,
+default false). It repeats current authentication,
 channel authorization and `shouldSubscribe` checks on the receiving instance
 before each delivery, including Redis fanout. False results or predicate errors
 remove only that event/channel membership. This optional server capability does
-not change the wire envelope, subscription acknowledgements, cross-language
-defaults or conformance requirements. See the
+not change the wire envelope, subscription acknowledgements, or fixture
+defaults. See the
 [TypeScript event guide](docs/typescript/events-and-channels.md#recheck-access-before-delivery)
 for asynchronous ordering and revocation limits.
 
