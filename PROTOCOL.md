@@ -164,7 +164,7 @@ Request headers the server MUST recognize:
 
 | Header           | Purpose                                                    |
 |------------------|------------------------------------------------------------|
-| `x-client-id`    | Binds this HTTP call to a WebSocket client uuid (optional) |
+| `x-client-id`    | Binds this HTTP call to a WebSocket client uuid (optional; 1–64 ASCII `[a-zA-Z0-9-]`, invalid values ignored) |
 | `x-api-key`      | Bearer-prefixed or raw auth token; populates `context.token` |
 | `origin`         | CORS validation                                            |
 
@@ -222,16 +222,20 @@ Source: `typeferry-ts/src/server/transports/hono-rate-limit.ts`.
 
 | Param  | Type   | Required | Constraint                                    |
 |--------|--------|----------|-----------------------------------------------|
-| `uuid` | string | no       | 1–64 ASCII chars from `[a-zA-Z0-9-]`; valid values remain unchanged; missing/invalid values receive a fresh random UUID |
+| `uuid` | string | no       | 1–64 ASCII chars from `[a-zA-Z0-9-]`; valid unused values remain unchanged; missing, invalid, or actively colliding values on unauthenticated handshakes receive a fresh random UUID |
 | `token`| string | no       | auth bearer token; omission means unauthenticated |
 | `meta` | string | no       | JSON-encoded object; MUST NOT exceed 10 000 bytes; invalid or oversize values MUST be normalized to `{}` |
 
 Sources: `src/server/transports/ws-shared.ts:17-20,204-240`.
 
 Invalid UUIDs MUST NOT be repaired by deleting characters, because that can
-alias another client's identity. The metadata size limit applies to the raw
-JSON string's UTF-8 bytes before parsing, including whitespace. Metadata MUST
-use JSON rather than EJSON decoding; tag-shaped objects remain literal objects.
+alias another client's identity. An unauthenticated handshake supplying a `uuid`
+that collides with an active client MUST NOT overwrite or close the existing
+client; the new connection receives a fresh CSPRNG UUID, and disconnect cleanup
+MUST verify node identity before removing a registry entry. The metadata size
+limit applies to the raw JSON string's UTF-8 bytes before parsing, including
+whitespace. Metadata MUST use JSON rather than EJSON decoding; tag-shaped
+objects remain literal objects.
 
 #### 2.2.2 Connection lifecycle
 
@@ -602,9 +606,10 @@ Conformance notes:
   in the current TS implementation — `EJSON.stringify` is the default
   (non-canonical) form. Implementations MUST match this exact behavior,
   including key-order non-stability, for cache-hit parity.
-- The cache is per-`Method` instance, in-process, unbounded in size,
-  and has no eviction except TTL. Multi-instance deployments get
-  distinct caches; Redis-based cache sharing is NOT part of this spec.
+- Anonymous caches MUST NOT store rejected, errored, or cancelled execution
+  outcomes, MUST bypass server-origin (`isServer`) invocations, and SHOULD bound
+  in-memory cache capacity. Multi-instance deployments get distinct caches;
+  Redis-based cache sharing is NOT part of this spec.
 
 ### 6.4 Schema validation
 
@@ -712,8 +717,9 @@ Source: `src/server/methods.ts:17-48`.
 
 Params: none.
 
-Clears `node.context`, `node.authenticated`, `node.userId`; emits
-`ServerEvents.LOGOUT`; returns `true`.
+Leaves all subscribed WebSocket rooms on the calling socket, clears
+`node.context`, `node.authenticated`, and `node.userId`, emits
+`ServerEvents.LOGOUT`, and returns `true`.
 
 Marked `protected: true` (`src/server/methods.ts:137`).
 
@@ -753,9 +759,10 @@ reserved.
 
 `Server.auth: (context) => unknown | false` is called per request:
 
-- HTTP: during `requestHandler` / `dispatchRpc`, with `context` equal
-  to the request's `context` field plus a `token` field extracted from
-  `x-api-key` (Bearer-prefix stripped).
+- HTTP: during `requestHandler` / `dispatchRpc`, with `context` filtered from
+  the request's plain-object `context` field according to the server's
+  `allowedContextKeys` allowlist (defaulting empty to `{}`), plus a `token`
+  field extracted from `x-api-key` (Bearer-prefix stripped).
 - WebSocket: during `authenticateNode`, with
   `{ token: <query-param token> }`.
 
@@ -877,12 +884,13 @@ reported to the client as `INTERNAL_ERROR` and logged server-side
 
 ### 10.1 Room name format
 
-`typeferry:${channel}:${eventName}` (`src/server/methods.ts:13-15`).
+`typeferry:${utf8ByteLength(channel)}:${channel}:${eventName}` (`src/server/methods.ts`).
 
 - `channel` defaults to the literal string `"NO_CHANNEL"` when the
   caller omits it (`src/utils/constants.ts:66`).
-- No escaping is applied to channel or event names. Applications that
-  use user-controlled channel values MUST sanitize them.
+- Prefixing `channel` by its UTF-8 byte length prevents delimiter collisions
+  when `channel` or `eventName` contains `:`. Applications should still
+  enforce `shouldAllowChannelSubscribe` / `shouldSubscribe` for authorization.
 
 ### 10.2 Event options
 
