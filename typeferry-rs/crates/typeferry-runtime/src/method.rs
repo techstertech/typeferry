@@ -19,12 +19,14 @@ pub type RpcHandler = Arc<dyn Fn(Arc<ClientNode>, Value) -> RpcFuture + Send + S
 pub type Middleware = Arc<dyn Fn(Arc<ClientNode>, Value) -> RpcFuture + Send + Sync>;
 
 pub const DEFAULT_MAX_AGE_MS: u64 = 60_000;
+pub const REDACTED_METHOD_TELEMETRY: &str = "[REDACTED]";
 
 #[derive(Clone, Default)]
 pub struct MethodOptions {
     pub cache: bool,
     pub max_age_ms: Option<u64>,
     pub protected: bool,
+    pub sensitive: bool,
     pub middleware: Vec<Middleware>,
     pub schema: Option<SchemaValidatorArc>,
 }
@@ -33,6 +35,7 @@ pub struct Method {
     pub uuid: String,
     pub name: String,
     pub is_protected: bool,
+    pub is_sensitive: bool,
     handler: RpcHandler,
     middleware: Vec<Middleware>,
     schema: Option<SchemaValidatorArc>,
@@ -58,6 +61,7 @@ impl Method {
             uuid: Uuid::new_v4().to_string(),
             name: name.into(),
             is_protected: opts.protected,
+            is_sensitive: opts.sensitive,
             handler,
             middleware: opts.middleware,
             schema: opts.schema,

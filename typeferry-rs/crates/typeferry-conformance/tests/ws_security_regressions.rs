@@ -27,6 +27,7 @@ async fn ws_duplicate_origin_size_limit_collision_and_user_index() {
         WebSocketOptions {
             origins: Some(vec!["https://allowed.test".into()]),
             allow_originless: false,
+            ..Default::default()
         },
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -116,4 +117,138 @@ async fn ws_duplicate_origin_size_limit_collision_and_user_index() {
         !matches!(closed_frame, Some(Ok(Message::Text(_)))),
         "expected victim WS close after node.close()"
     );
+}
+
+#[tokio::test]
+async fn ws_handshake_authenticator_query_opt_out_and_rate_limit() {
+    use typeferry_runtime::MethodOptions;
+    use typeferry_ws::RateLimit;
+
+    // 1) allow_query_token: false blocks ?token= while handshake_authenticator still authenticates
+    let server = Server::new(ServerOptions::default());
+    server.set_auth(Arc::new(|_n, ctx| {
+        async move {
+            if ctx.get("token").and_then(|v| v.as_str()) == Some("query-secret") {
+                json!({"user": {"_id": "query-user"}})
+            } else {
+                Value::Null
+            }
+        }
+        .boxed()
+    }));
+    server.add_method(
+        "echo",
+        Arc::new(|_n, p| async move { Ok(p) }.boxed()),
+        MethodOptions::default(),
+    );
+
+    let blocked_app = typeferry_ws::router_with_options(
+        server.clone(),
+        WebSocketOptions {
+            allow_query_token: false,
+            rate_limit: Some(RateLimit {
+                max: 2,
+                window: Duration::from_secs(60),
+            }),
+            ..Default::default()
+        },
+    );
+    let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port1 = listener1.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener1, blocked_app).await;
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (mut ws1, _) = connect_async(format!(
+        "ws://127.0.0.1:{port1}/typeferry-ws?token=query-secret"
+    ))
+    .await
+    .unwrap();
+    let auth1: Value =
+        serde_json::from_str(ws1.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(auth1["authenticated"], false);
+
+    // Rate limit 2 per window: 3rd RPC returns Rate Limit Exceeded, pong still accepted.
+    ws1.send(Message::Text(
+        r#"{"t":"rpc","id":"1","method":"echo"}"#.into(),
+    ))
+    .await
+    .unwrap();
+    ws1.send(Message::Text(
+        r#"{"t":"rpc","id":"2","method":"echo"}"#.into(),
+    ))
+    .await
+    .unwrap();
+    ws1.send(Message::Text(
+        r#"{"t":"rpc","id":"3","method":"echo"}"#.into(),
+    ))
+    .await
+    .unwrap();
+    let _ = ws1.next().await.unwrap().unwrap();
+    let _ = ws1.next().await.unwrap().unwrap();
+    let r3: Value =
+        serde_json::from_str(ws1.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(r3["id"], "3");
+    assert_eq!(r3["error"], typeferry_protocol::errors::RATE_LIMIT_EXCEEDED);
+    ws1.send(Message::Text(r#"{"t":"pong"}"#.into()))
+        .await
+        .unwrap();
+
+    // 2) handshake_authenticator takes precedence and never falls back to ?token=
+    let hs_app = typeferry_ws::router_with_options(
+        server,
+        WebSocketOptions {
+            handshake_authenticator: Some(Arc::new(|_node, handshake| {
+                async move {
+                    if handshake.headers.get("cookie").map(String::as_str) == Some("sid=good") {
+                        json!({"user": {"_id": "cookie-user"}})
+                    } else {
+                        Value::Null
+                    }
+                }
+                .boxed()
+            })),
+            ..Default::default()
+        },
+    );
+    let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port2 = listener2.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener2, hs_app).await;
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let fail_req = Request::builder()
+        .uri(format!(
+            "ws://127.0.0.1:{port2}/typeferry-ws?token=query-secret"
+        ))
+        .header("Host", format!("127.0.0.1:{port2}"))
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(())
+        .unwrap();
+    let (mut ws_fail, _) = connect_async(fail_req).await.unwrap();
+    let auth_fail: Value =
+        serde_json::from_str(ws_fail.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(auth_fail["authenticated"], false);
+
+    let ok_req = Request::builder()
+        .uri(format!(
+            "ws://127.0.0.1:{port2}/typeferry-ws?token=query-secret"
+        ))
+        .header("Host", format!("127.0.0.1:{port2}"))
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Cookie", "sid=good")
+        .body(())
+        .unwrap();
+    let (mut ws_ok, _) = connect_async(ok_req).await.unwrap();
+    let auth_ok: Value =
+        serde_json::from_str(ws_ok.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(auth_ok["authenticated"], true);
 }

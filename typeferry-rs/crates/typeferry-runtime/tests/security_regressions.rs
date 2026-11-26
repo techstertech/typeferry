@@ -407,3 +407,75 @@ async fn protected_call_on_node_and_rpc_off_bounds_and_user_index_switch() {
             .contains_key("u-second")
     );
 }
+
+#[tokio::test]
+async fn revalidate_on_delivery_and_sensitive_method_flag() {
+    let server = Server::new(ServerOptions::default());
+    let rooms = Arc::new(RoomRegistry::new());
+    server.attach_room_registry(rooms.clone());
+
+    let allow = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let allow_c = allow.clone();
+    server.add_event_named(
+        "live.secret",
+        EventOptions {
+            protected: true,
+            revalidate_on_delivery: true,
+            should_subscribe: Some(Arc::new(move |node, _ev, _ch| {
+                let allow_c = allow_c.clone();
+                async move { allow_c.load(Ordering::Relaxed) && node.is_authenticated() }.boxed()
+            })),
+            ..Default::default()
+        },
+    );
+    server.add_method(
+        "sens.call",
+        Arc::new(|_n, p| async move { Ok(p) }.boxed()),
+        MethodOptions {
+            sensitive: true,
+            ..Default::default()
+        },
+    );
+    assert!(server.get_method("sens.call").unwrap().is_sensitive);
+
+    let sock = TestSocket::new(42);
+    let node = ClientNode::new(Some(sock.clone()));
+    node.set_authenticated(true);
+    server.add_client(node.clone());
+
+    let subscribed = server
+        .call_method_on_node(
+            methods::RPC_ON,
+            json!({"events": ["live.secret"], "channel": "room-r"}),
+            node.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(subscribed, json!({"live.secret": true}));
+
+    let ev = server
+        .events
+        .read()
+        .unwrap()
+        .get("live.secret")
+        .cloned()
+        .unwrap();
+    let (frame1, _) = ev.encode_payload("room-r", &json!({"n": 1}));
+    server
+        .channel("room-r")
+        .propagate("live.secret", &frame1, None)
+        .await;
+    assert_eq!(sock.sent.lock().unwrap().len(), 1);
+
+    allow.store(false, Ordering::Relaxed);
+    let (frame2, _) = ev.encode_payload("room-r", &json!({"n": 2}));
+    server
+        .channel("room-r")
+        .propagate("live.secret", &frame2, None)
+        .await;
+    assert_eq!(sock.sent.lock().unwrap().len(), 1);
+    assert_eq!(
+        rooms.room_size(&typeferry_protocol::room_name("room-r", "live.secret")),
+        0
+    );
+}

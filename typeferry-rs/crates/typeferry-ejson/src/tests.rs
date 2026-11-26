@@ -297,3 +297,32 @@ fn stable_stringify_sorts_keys_recursively() {
     let out = stable_stringify::stringify(&input);
     assert_eq!(out, r#"{"a":[1,2,3],"z":{"a":2,"b":1}}"#);
 }
+
+#[test]
+fn base64_rejects_nonzero_trailing_padding_bits() {
+    assert!(crate::base64::decode("AB==").is_err());
+    assert!(crate::base64::decode("AAB=").is_err());
+    assert_eq!(crate::base64::decode("AA==").unwrap(), vec![0]);
+    assert_eq!(crate::base64::decode("AAA=").unwrap(), vec![0, 0]);
+    assert_eq!(crate::base64::decode("AAE=").unwrap(), vec![0, 1]);
+}
+
+#[test]
+fn stable_stringify_enforces_recursion_depth_limit() {
+    let mut allowed = serde_json::json!(1);
+    for _ in 0..128 {
+        allowed = serde_json::json!({ "n": allowed });
+    }
+    assert!(stable_stringify::try_stringify(&allowed).is_ok());
+    assert!(stable_stringify::try_stringify_noncanonical(&allowed).is_ok());
+
+    let too_deep = serde_json::json!({ "n": allowed });
+    assert_eq!(
+        stable_stringify::try_stringify(&too_deep),
+        Err(stable_stringify::StringifyDepthError)
+    );
+    assert_eq!(
+        stable_stringify::try_stringify_noncanonical(&too_deep),
+        Err(stable_stringify::StringifyDepthError)
+    );
+}

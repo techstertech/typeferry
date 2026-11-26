@@ -115,6 +115,7 @@ async fn origin_policies_admit_only_the_selected_requests() {
         let options = HttpOptions {
             origins,
             allow_originless,
+            ..Default::default()
         };
         let app = router_with_options(server, options);
         let mut request = Request::post("/__h");

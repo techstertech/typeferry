@@ -5,27 +5,169 @@
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::post,
 };
 use serde_json::{Map, Value};
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use typeferry_ejson::{EjsonValue, Presentation};
 use typeferry_protocol::{
-    AUTH_TIMEOUT_MS, CLIENT_ID_HEADER_KEY, HTTP_ENDPOINT_PATH, MAX_UUID_LENGTH, TOKEN_HEADER_KEY,
+    AUTH_TIMEOUT_MS, CLIENT_ID_HEADER_KEY, HTTP_ENDPOINT_PATH, MAX_UUID_LENGTH, OriginPolicy,
+    TOKEN_HEADER_KEY,
     errors::{INTERNAL_ERROR, INVALID_REQUEST, METHOD_FORBIDDEN, METHOD_NOT_FOUND},
 };
 use typeferry_runtime::{ClientNode, Server, TypeFerryError};
 
+const DEFAULT_HTTP_BODY_LIMIT: usize = 4 * 1024 * 1024;
+const DEFAULT_HTTP_RATE_MAX: usize = 120;
+const DEFAULT_HTTP_RATE_WINDOW: Duration = Duration::from_secs(60);
+const MAX_LIMITER_ENTRIES: usize = 100_000;
+
+/// Sliding-window rate limit policy applied per peer IP on `POST /__h`.
+#[derive(Debug, Clone)]
+pub struct RateLimit {
+    pub max: usize,
+    pub window: Duration,
+}
+
+impl Default for RateLimit {
+    fn default() -> Self {
+        Self {
+            max: DEFAULT_HTTP_RATE_MAX,
+            window: DEFAULT_HTTP_RATE_WINDOW,
+        }
+    }
+}
+
 /**
- * HTTP origin options. Configure WebSocket admission independently through its
- * own router options; the default HTTP router remains unrestricted.
+ * HTTP transport options configuring origin admission, default rate limiting,
+ * body ceilings, and authentication timeouts.
  */
-pub type HttpOptions = typeferry_protocol::OriginPolicy;
+#[derive(Debug, Clone)]
+pub struct HttpOptions {
+    pub origins: Option<Vec<String>>,
+    pub allow_originless: bool,
+    pub rate_limit: Option<RateLimit>,
+    pub max_body_bytes: usize,
+    pub auth_timeout: Duration,
+}
+
+impl Default for HttpOptions {
+    fn default() -> Self {
+        Self {
+            origins: None,
+            allow_originless: false,
+            rate_limit: Some(RateLimit::default()),
+            max_body_bytes: DEFAULT_HTTP_BODY_LIMIT,
+            auth_timeout: Duration::from_millis(AUTH_TIMEOUT_MS),
+        }
+    }
+}
+
+impl From<OriginPolicy> for HttpOptions {
+    fn from(policy: OriginPolicy) -> Self {
+        Self {
+            origins: policy.origins,
+            allow_originless: policy.allow_originless,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HttpState {
+    server: Arc<Server>,
+    auth_timeout: Duration,
+}
+
+struct SlidingWindowLimiter {
+    max: usize,
+    window: Duration,
+    entries: HashMap<String, VecDeque<Instant>>,
+    last_sweep: Instant,
+}
+
+impl SlidingWindowLimiter {
+    fn new(config: RateLimit) -> Self {
+        Self {
+            max: config.max,
+            window: config.window,
+            entries: HashMap::new(),
+            last_sweep: Instant::now(),
+        }
+    }
+
+    fn sweep(&mut self, now: Instant) {
+        self.entries.retain(|_, hits| {
+            while let Some(&front) = hits.front() {
+                if now.saturating_duration_since(front) >= self.window {
+                    hits.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !hits.is_empty()
+        });
+        self.last_sweep = now;
+    }
+
+    fn try_consume(&mut self, key: &str) -> (bool, usize, u64) {
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_sweep) >= self.window {
+            self.sweep(now);
+        }
+        if !self.entries.contains_key(key) && self.entries.len() >= MAX_LIMITER_ENTRIES {
+            // Bounded capacity eviction so distinct-IP floods cannot grow memory unboundedly.
+            self.sweep(now);
+            if self.entries.len() >= MAX_LIMITER_ENTRIES
+                && let Some(evict_key) = self.entries.keys().next().cloned()
+            {
+                self.entries.remove(&evict_key);
+            }
+        }
+        let hits = self.entries.entry(key.to_string()).or_default();
+        while let Some(&front) = hits.front() {
+            if now.saturating_duration_since(front) >= self.window {
+                hits.pop_front();
+            } else {
+                break;
+            }
+        }
+        if self.max == 0 || hits.len() >= self.max {
+            let reset = hits
+                .front()
+                .map(|front| {
+                    self.window
+                        .saturating_sub(now.saturating_duration_since(*front))
+                })
+                .unwrap_or(self.window);
+            let reset_secs = reset.as_secs() + u64::from(reset.subsec_nanos() > 0);
+            return (false, 0, reset_secs);
+        }
+        hits.push_back(now);
+        let reset = hits
+            .front()
+            .map(|front| {
+                self.window
+                    .saturating_sub(now.saturating_duration_since(*front))
+            })
+            .unwrap_or(self.window);
+        let reset_secs = reset.as_secs() + u64::from(reset.subsec_nanos() > 0);
+        (true, self.max - hits.len(), reset_secs)
+    }
+}
+
+fn is_production_env() -> bool {
+    ["TYPEFERRY_ENV", "NODE_ENV", "RUST_ENV"]
+        .into_iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| value == "production"))
+}
 
 /// Build the axum router for the HTTP transport.
 pub fn router(server: Arc<Server>) -> Router {
@@ -33,23 +175,75 @@ pub fn router(server: Arc<Server>) -> Router {
 }
 
 /**
- * Build the RPC router with origin admission before request-body extraction.
- * Only this router's protocol endpoint receives the configured policy.
+ * Build the RPC router with origin admission and rate limiting before
+ * request-body extraction.
  */
-const DEFAULT_HTTP_BODY_LIMIT: usize = 4 * 1024 * 1024;
-
 pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router {
+    if options.origins.is_none() && is_production_env() {
+        tracing::warn!(
+            "TypeFerry HTTP transport started without an origins allowlist in production"
+        );
+    }
+
     let mut endpoint = post(handle_rpc);
 
     if options.origins.is_some() {
         endpoint = endpoint.options(|| async { StatusCode::NO_CONTENT });
     }
 
+    let limiter = options
+        .rate_limit
+        .clone()
+        .map(|cfg| Arc::new(Mutex::new(SlidingWindowLimiter::new(cfg))));
+    let state = HttpState {
+        server,
+        auth_timeout: options.auth_timeout,
+    };
+
     Router::new()
         .route(HTTP_ENDPOINT_PATH, endpoint)
-        .route_layer(DefaultBodyLimit::max(DEFAULT_HTTP_BODY_LIMIT))
+        .route_layer(DefaultBodyLimit::max(options.max_body_bytes))
+        .route_layer(middleware::from_fn_with_state(limiter, apply_rate_limit))
         .route_layer(middleware::from_fn_with_state(options, admit_origin))
-        .with_state(server)
+        .with_state(state)
+}
+
+async fn apply_rate_limit(
+    State(limiter): State<Option<Arc<Mutex<SlidingWindowLimiter>>>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(limiter) = limiter else {
+        return next.run(request).await;
+    };
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let (limit_max, allowed, remaining, reset_secs) = {
+        let mut guard = limiter.lock().expect("http rate limiter poisoned");
+        let (allowed, remaining, reset_secs) = guard.try_consume(&peer);
+        (guard.max, allowed, remaining, reset_secs)
+    };
+
+    let mut response = if allowed {
+        next.run(request).await
+    } else {
+        StatusCode::TOO_MANY_REQUESTS.into_response()
+    };
+
+    let headers = response.headers_mut();
+    if let Ok(val) = HeaderValue::from_str(&limit_max.to_string()) {
+        headers.insert("ratelimit-limit", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&remaining.to_string()) {
+        headers.insert("ratelimit-remaining", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&reset_secs.to_string()) {
+        headers.insert("ratelimit-reset", val);
+    }
+    response
 }
 
 async fn admit_origin(
@@ -62,11 +256,15 @@ async fn admit_origin(
     if origin_iter.next().is_some() {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let policy = OriginPolicy {
+        origins: options.origins.clone(),
+        allow_originless: options.allow_originless,
+    };
     let admitted = match origin.as_ref() {
         Some(origin) => origin
             .to_str()
-            .is_ok_and(|origin| options.allows(Some(origin))),
-        None => options.allows(None),
+            .is_ok_and(|origin| policy.allows(Some(origin))),
+        None => policy.allows(None),
     };
 
     if !admitted {
@@ -99,18 +297,8 @@ async fn admit_origin(
     response
 }
 
-async fn handle_rpc(
-    State(server): State<Arc<Server>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    handle_rpc_with_timeout(
-        server,
-        headers,
-        body,
-        Duration::from_millis(AUTH_TIMEOUT_MS),
-    )
-    .await
+async fn handle_rpc(State(state): State<HttpState>, headers: HeaderMap, body: Bytes) -> Response {
+    handle_rpc_with_timeout(state.server, headers, body, state.auth_timeout).await
 }
 
 async fn handle_rpc_with_timeout(
@@ -232,7 +420,12 @@ async fn handle_rpc_with_timeout(
         }
 
         // Unknown errors → INTERNAL_ERROR with uuid only.
-        Err(_) => {
+        Err(err) => {
+            if method.is_sensitive {
+                tracing::error!(method = %method_name, "Sensitive method failed");
+            } else {
+                tracing::error!(method = %method_name, error = %err, "Method execution failed");
+            }
             if is_void {
                 return empty_200();
             }
@@ -284,7 +477,13 @@ fn error_response(
 }
 
 fn json_response(body: &Value) -> Response {
-    let text = typeferry_ejson::stable_stringify::stringify_noncanonical(body);
+    let text = match typeferry_ejson::stable_stringify::try_stringify_noncanonical(body) {
+        Ok(encoded) => encoded,
+        Err(_) => typeferry_ejson::stable_stringify::stringify_noncanonical(&serde_json::json!({
+            "type": "error",
+            "message": INTERNAL_ERROR,
+        })),
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")

@@ -5,7 +5,10 @@
 
 use serde_json::{Value, json};
 use typeferry_protocol::NO_CHANNEL;
-use typeferry_redis::{DecodedInbound, build_publish_envelope, decode_inbound};
+use typeferry_redis::{
+    DecodedInbound, build_publish_envelope, build_publish_envelope_signed, decode_inbound,
+    decode_inbound_signed, format_signing_input,
+};
 
 #[test]
 fn publish_envelope_without_exclude() {
@@ -102,4 +105,41 @@ fn fixture_011_exclude_round_trip() {
     assert_eq!(decoded.event, "chat.message");
     assert_eq!(decoded.channel, "room-a");
     assert_eq!(decoded.exclude_uuid, Some("orig-1".into()));
+}
+
+#[test]
+fn hmac_signing_matches_cross_language_vector_and_rejects_tampering() {
+    assert_eq!(
+        format_signing_input("chat.message", "room-a", r#"{"t":"event"}"#, Some("orig-1")),
+        r#"12:chat.message|6:room-a|13:{"t":"event"}|6:orig-1"#
+    );
+
+    let secret = "test-secret";
+    let payload = build_publish_envelope_signed(
+        "chat.message",
+        "room-a",
+        r#"{"t":"event"}"#,
+        Some("orig-1"),
+        Some(secret),
+    );
+    let parsed: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        parsed["sig"],
+        "2fe864725cc91a1de99652933920ffbd5bd716753b3b4a155584e49ea0d4fed0"
+    );
+
+    let decoded = decode_inbound_signed(&payload, Some(secret)).unwrap();
+    assert_eq!(decoded.event, "chat.message");
+    assert_eq!(decoded.exclude_uuid.as_deref(), Some("orig-1"));
+
+    // Unsigned, tampered, wrong-type sig, and non-string channel/excludeUuid must be rejected.
+    let unsigned = build_publish_envelope("chat.message", "room-a", r#"{"t":"event"}"#, None);
+    assert!(decode_inbound_signed(&unsigned, Some(secret)).is_none());
+    let tampered = payload.replace("chat.message", "chat.tampered");
+    assert!(decode_inbound_signed(&tampered, Some(secret)).is_none());
+    assert!(decode_inbound(r#"{"event":"e","channel":123,"message":"{}"}"#).is_none());
+    assert!(
+        decode_inbound(r#"{"event":"e","channel":"c","message":"{}","excludeUuid":false}"#)
+            .is_none()
+    );
 }

@@ -16,6 +16,7 @@ async fn duplicate_origin_rejected_with_403() {
         HttpOptions {
             origins: Some(vec!["https://allowed.test".into()]),
             allow_originless: false,
+            ..Default::default()
         },
     );
     let mut req = Request::post("/__h")
@@ -134,4 +135,73 @@ async fn http_context_filtered_by_allowed_keys() {
     assert_eq!(ctx.get("locale"), Some(&json!("pt")));
     assert_eq!(ctx.get("role"), None);
     assert_eq!(ctx.get("token"), Some(&json!("real-tok")));
+}
+
+#[tokio::test]
+async fn http_rate_limit_emits_headers_and_returns_429() {
+    use std::time::Duration;
+    use typeferry_http::RateLimit;
+    use typeferry_protocol::OriginPolicy;
+
+    let server = Server::new(ServerOptions::default());
+    server.add_method(
+        "ok",
+        Arc::new(|_n, _p| async move { Ok(json!(true)) }.boxed()),
+        MethodOptions::default(),
+    );
+
+    let converted = HttpOptions::from(OriginPolicy {
+        origins: Some(vec!["https://a.test".into()]),
+        allow_originless: true,
+    });
+    assert!(converted.rate_limit.is_some());
+
+    let app = router_with_options(
+        server,
+        HttpOptions {
+            rate_limit: Some(RateLimit {
+                max: 2,
+                window: Duration::from_secs(60),
+            }),
+            ..Default::default()
+        },
+    );
+
+    let r1 = app
+        .clone()
+        .oneshot(
+            Request::post("/__h")
+                .body(Body::from(r#"{"payload":{"method":"ok"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), StatusCode::OK);
+    assert_eq!(r1.headers()["ratelimit-limit"], "2");
+    assert_eq!(r1.headers()["ratelimit-remaining"], "1");
+    assert!(r1.headers().contains_key("ratelimit-reset"));
+
+    let r2 = app
+        .clone()
+        .oneshot(
+            Request::post("/__h")
+                .body(Body::from(r#"{"payload":{"method":"ok"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), StatusCode::OK);
+    assert_eq!(r2.headers()["ratelimit-remaining"], "0");
+
+    let r3 = app
+        .oneshot(
+            Request::post("/__h")
+                .body(Body::from(r#"{"payload":{"method":"ok"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r3.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(r3.headers()["ratelimit-limit"], "2");
+    assert_eq!(r3.headers()["ratelimit-remaining"], "0");
 }

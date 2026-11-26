@@ -9,31 +9,158 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use futures::future::BoxFuture;
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use typeferry_ejson::{EjsonValue, Presentation};
 use typeferry_protocol::{
-    AUTH_TIMEOUT_MS, MAX_META_SIZE, MAX_UUID_LENGTH, MessageType, PING_INTERVAL_MS,
+    AUTH_TIMEOUT_MS, MAX_META_SIZE, MAX_UUID_LENGTH, MessageType, OriginPolicy, PING_INTERVAL_MS,
     TYPEFERRY_WS_PATH,
-    errors::{INTERNAL_ERROR, METHOD_FORBIDDEN, METHOD_NOT_FOUND},
+    errors::{INTERNAL_ERROR, METHOD_FORBIDDEN, METHOD_NOT_FOUND, RATE_LIMIT_EXCEEDED},
 };
 use typeferry_runtime::{ClientNode, RoomRegistry, Server, TypeFerryError, TypeFerrySocket};
 
 static SOCKET_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+const MAX_WS_MESSAGE_BYTES: usize = 1024 * 1024;
+const DEFAULT_WS_RATE_MAX: usize = 120;
+const DEFAULT_WS_RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Request snapshot passed to [`WebSocketHandshakeAuthenticator`].
+#[derive(Debug, Clone, Default)]
+pub struct WebSocketHandshake {
+    pub path: String,
+    pub headers: HashMap<String, String>,
+    pub query: HashMap<String, String>,
+}
+
+/// Optional application-owned handshake authenticator; overrides `?token=` auth.
+pub type WebSocketHandshakeAuthenticator =
+    Arc<dyn Fn(Arc<ClientNode>, WebSocketHandshake) -> BoxFuture<'static, Value> + Send + Sync>;
+
+/// Per-connection sliding-window rate limit applied to inbound WebSocket RPC/ping frames.
+#[derive(Debug, Clone)]
+pub struct RateLimit {
+    pub max: usize,
+    pub window: Duration,
+}
+
+impl Default for RateLimit {
+    fn default() -> Self {
+        Self {
+            max: DEFAULT_WS_RATE_MAX,
+            window: DEFAULT_WS_RATE_WINDOW,
+        }
+    }
+}
+
 /**
- * WebSocket origin options, independent of the HTTP adapter's options.
+ * WebSocket transport options configuring origin policy, per-connection rate
+ * limiting, frame ceilings, and handshake authentication.
  */
-pub type WebSocketOptions = typeferry_protocol::OriginPolicy;
+#[derive(Clone)]
+pub struct WebSocketOptions {
+    pub origins: Option<Vec<String>>,
+    pub allow_originless: bool,
+    pub rate_limit: Option<RateLimit>,
+    pub max_message_bytes: usize,
+    pub allow_query_token: bool,
+    pub handshake_authenticator: Option<WebSocketHandshakeAuthenticator>,
+}
+
+impl fmt::Debug for WebSocketOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebSocketOptions")
+            .field("origins", &self.origins)
+            .field("allow_originless", &self.allow_originless)
+            .field("rate_limit", &self.rate_limit)
+            .field("max_message_bytes", &self.max_message_bytes)
+            .field("allow_query_token", &self.allow_query_token)
+            .field(
+                "handshake_authenticator",
+                &self.handshake_authenticator.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl Default for WebSocketOptions {
+    fn default() -> Self {
+        Self {
+            origins: None,
+            allow_originless: false,
+            rate_limit: Some(RateLimit::default()),
+            max_message_bytes: MAX_WS_MESSAGE_BYTES,
+            allow_query_token: true,
+            handshake_authenticator: None,
+        }
+    }
+}
+
+impl From<OriginPolicy> for WebSocketOptions {
+    fn from(policy: OriginPolicy) -> Self {
+        Self {
+            origins: policy.origins,
+            allow_originless: policy.allow_originless,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WsState {
+    server: Arc<Server>,
+    options: Arc<WebSocketOptions>,
+}
+
+struct ConnRateLimiter {
+    max: usize,
+    window: Duration,
+    hits: VecDeque<Instant>,
+}
+
+impl ConnRateLimiter {
+    fn new(config: &RateLimit) -> Self {
+        Self {
+            max: config.max,
+            window: config.window,
+            hits: VecDeque::new(),
+        }
+    }
+
+    fn try_consume(&mut self) -> bool {
+        let now = Instant::now();
+        while let Some(&front) = self.hits.front() {
+            if now.saturating_duration_since(front) >= self.window {
+                self.hits.pop_front();
+            } else {
+                break;
+            }
+        }
+        if self.max == 0 || self.hits.len() >= self.max {
+            return false;
+        }
+        self.hits.push_back(now);
+        true
+    }
+}
+
+fn is_production_env() -> bool {
+    ["TYPEFERRY_ENV", "NODE_ENV", "RUST_ENV"]
+        .into_iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| value == "production"))
+}
 
 /// Attach the WebSocket route onto an axum router.
 pub fn router(server: Arc<Server>) -> Router {
@@ -44,18 +171,29 @@ pub fn router(server: Arc<Server>) -> Router {
  * Attach the WebSocket route with origin admission before upgrade or auth.
  */
 pub fn router_with_options(server: Arc<Server>, options: WebSocketOptions) -> Router {
+    if options.origins.is_none() && is_production_env() {
+        tracing::warn!(
+            "TypeFerry WebSocket transport started without an origins allowlist in production"
+        );
+    }
     // Ensure the room registry is wired up on the server exactly once.
     let rooms = Arc::new(RoomRegistry::new());
-    server.attach_room_registry(rooms.clone());
+    server.attach_room_registry(rooms);
+
+    let shared_options = Arc::new(options);
+    let state = WsState {
+        server,
+        options: shared_options.clone(),
+    };
 
     Router::new()
         .route(TYPEFERRY_WS_PATH, get(upgrade))
-        .route_layer(middleware::from_fn_with_state(options, admit_origin))
-        .with_state(server)
+        .route_layer(middleware::from_fn_with_state(shared_options, admit_origin))
+        .with_state(state)
 }
 
 async fn admit_origin(
-    State(options): State<WebSocketOptions>,
+    State(options): State<Arc<WebSocketOptions>>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -64,11 +202,15 @@ async fn admit_origin(
     if origin_iter.next().is_some() {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let policy = OriginPolicy {
+        origins: options.origins.clone(),
+        allow_originless: options.allow_originless,
+    };
     let admitted = match first {
         Some(origin) => origin
             .to_str()
-            .is_ok_and(|origin| options.allows(Some(origin))),
-        None => options.allows(None),
+            .is_ok_and(|origin| policy.allows(Some(origin))),
+        None => policy.allows(None),
     };
 
     if admitted {
@@ -78,34 +220,54 @@ async fn admit_origin(
     }
 }
 
-#[derive(Debug, Default, serde::Deserialize)]
-struct UpgradeQuery {
-    #[serde(default)]
-    token: Option<String>,
-    #[serde(default)]
-    uuid: Option<String>,
-    #[serde(default)]
-    meta: Option<String>,
+fn build_headers_map(headers: &HeaderMap) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        let Ok(text) = value.to_str() else {
+            continue;
+        };
+        if lower == "cookie" {
+            result
+                .entry(lower)
+                .and_modify(|existing: &mut String| {
+                    existing.push_str("; ");
+                    existing.push_str(text);
+                })
+                .or_insert_with(|| text.to_string());
+        } else {
+            result.entry(lower).or_insert_with(|| text.to_string());
+        }
+    }
+    result
 }
-
-const MAX_WS_MESSAGE_BYTES: usize = 1024 * 1024;
 
 async fn upgrade(
     ws: WebSocketUpgrade,
-    State(server): State<Arc<Server>>,
-    Query(query): Query<UpgradeQuery>,
+    State(state): State<WsState>,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
-        .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_connection(server, socket, query))
+    let handshake = WebSocketHandshake {
+        path: uri.path().to_string(),
+        headers: build_headers_map(&headers),
+        query,
+    };
+    let limit = state.options.max_message_bytes;
+    ws.max_message_size(limit)
+        .max_frame_size(limit)
+        .on_upgrade(move |socket| handle_connection(state, socket, handshake))
 }
 
-async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: UpgradeQuery) {
+async fn handle_connection(state: WsState, socket: WebSocket, handshake: WebSocketHandshake) {
+    let server = state.server;
+    let options = state.options;
     let (sink, mut stream) = socket.split();
     let adapter: Arc<AxumSocket> = AxumSocket::new(sink);
 
     let node = ClientNode::new(Some(adapter.clone() as Arc<dyn TypeFerrySocket>));
-    if let Some(client_uuid) = query.uuid.as_deref()
+    if let Some(client_uuid) = handshake.query.get("uuid").map(String::as_str)
         && !client_uuid.is_empty()
         && client_uuid.len() <= MAX_UUID_LENGTH
         && client_uuid
@@ -114,41 +276,56 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
     {
         node.set_id(client_uuid);
     }
-    *node.meta.write().expect("meta poisoned") = query
-        .meta
-        .as_deref()
+    *node.meta.write().expect("meta poisoned") = handshake
+        .query
+        .get("meta")
+        .map(String::as_str)
         .filter(|raw| raw.len() <= MAX_META_SIZE)
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
     server.add_ws_client(node.clone());
 
-    // Run auth if a token was passed; otherwise emit `authenticated:false`
-    // immediately per PROTOCOL.md §2.2.2.
-    let auth_enabled = *server
-        .is_auth_enabled
-        .read()
-        .expect("is_auth_enabled poisoned");
-
-    if auth_enabled
-        && let Some(token) = query.token.as_deref()
-        && !token.is_empty()
-    {
-        let mut ctx = serde_json::Map::new();
-        ctx.insert("token".into(), serde_json::Value::String(token.to_string()));
-        // Dropping the callback future on timeout prevents a later result from
-        // authenticating this connection. Runtime normalizes falsey results.
-        let auth_result = tokio::time::timeout(
+    if let Some(authenticator) = options.handshake_authenticator.as_ref() {
+        let raw_result = tokio::time::timeout(
             Duration::from_millis(AUTH_TIMEOUT_MS),
-            server.run_auth(node.clone(), serde_json::Value::Object(ctx)),
+            authenticator(node.clone(), handshake.clone()),
         )
         .await
         .unwrap_or(Value::Null);
-
+        let auth_result = Server::normalize_auth_result(&node, raw_result);
         node.set_authenticated(!auth_result.is_null());
         node.set_context(auth_result);
         if node.is_authenticated() {
             server.refresh_client_user_index(&node);
+        }
+    } else {
+        let auth_enabled = *server
+            .is_auth_enabled
+            .read()
+            .expect("is_auth_enabled poisoned");
+
+        if auth_enabled
+            && options.allow_query_token
+            && let Some(token) = handshake.query.get("token").map(String::as_str)
+            && !token.is_empty()
+        {
+            let mut ctx = serde_json::Map::new();
+            ctx.insert("token".into(), serde_json::Value::String(token.to_string()));
+            // Dropping the callback future on timeout prevents a later result from
+            // authenticating this connection. Runtime normalizes falsey results.
+            let auth_result = tokio::time::timeout(
+                Duration::from_millis(AUTH_TIMEOUT_MS),
+                server.run_auth(node.clone(), serde_json::Value::Object(ctx)),
+            )
+            .await
+            .unwrap_or(Value::Null);
+
+            node.set_authenticated(!auth_result.is_null());
+            node.set_context(auth_result);
+            if node.is_authenticated() {
+                server.refresh_client_user_index(&node);
+            }
         }
     }
     node.emit_auth_result(node.is_authenticated()).await;
@@ -180,6 +357,10 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
         }
     });
 
+    let limiter = options
+        .rate_limit
+        .as_ref()
+        .map(|cfg| Arc::new(Mutex::new(ConnRateLimiter::new(cfg))));
     let mut close_rx = adapter.subscribe_close();
     let dyn_socket: Arc<dyn TypeFerrySocket> = adapter.clone();
     loop {
@@ -193,7 +374,15 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
         };
         match msg {
             Message::Text(text) => {
-                dispatch_frame(&server, &node, &dyn_socket, &pong_flag, &text).await;
+                dispatch_frame_with_limiter(
+                    &server,
+                    &node,
+                    &dyn_socket,
+                    &pong_flag,
+                    limiter.as_deref(),
+                    &text,
+                )
+                .await;
             }
             Message::Close(_) => break,
             _ => {}
@@ -218,6 +407,17 @@ pub async fn dispatch_frame(
     pong_flag: &AtomicBool,
     text: &str,
 ) {
+    dispatch_frame_with_limiter(server, node, socket, pong_flag, None, text).await;
+}
+
+async fn dispatch_frame_with_limiter(
+    server: &Arc<Server>,
+    node: &Arc<ClientNode>,
+    socket: &Arc<dyn TypeFerrySocket>,
+    pong_flag: &AtomicBool,
+    limiter: Option<&Mutex<ConnRateLimiter>>,
+    text: &str,
+) {
     let decoded = match Presentation::decode(text) {
         Ok(value) => typeferry_ejson::to_json_value(&value),
         Err(_) => return,
@@ -236,6 +436,12 @@ pub async fn dispatch_frame(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            if let Some(lim) = limiter
+                && !lim.lock().expect("ws rate limiter poisoned").try_consume()
+            {
+                send_rpc_error(socket, &id, RATE_LIMIT_EXCEEDED, None).await;
+                return;
+            }
             let method = obj
                 .get("method")
                 .and_then(|v| v.as_str())
@@ -246,6 +452,11 @@ pub async fn dispatch_frame(
             handle_rpc(server, node, socket, id, method, params).await;
         }
         "rpc:void" => {
+            if let Some(lim) = limiter
+                && !lim.lock().expect("ws rate limiter poisoned").try_consume()
+            {
+                return;
+            }
             let method = obj
                 .get("method")
                 .and_then(|v| v.as_str())
@@ -254,9 +465,30 @@ pub async fn dispatch_frame(
             let params = obj.get("params").cloned().unwrap_or(Value::Null);
             if let Some(m) = server.get_method(&method)
                 && (!m.is_protected || node.is_authenticated())
+                && let Err(err) = m.exec(params, node.clone()).await
             {
-                let _ = m.exec(params, node.clone()).await;
+                if m.is_sensitive {
+                    tracing::error!(method = %method, "Sensitive void method failed");
+                } else {
+                    tracing::error!(method = %method, error = %err, "Void method failed");
+                }
             }
+        }
+        "ping" => {
+            if let Some(lim) = limiter
+                && !lim.lock().expect("ws rate limiter poisoned").try_consume()
+            {
+                return;
+            }
+            let pong = Presentation::encode(&EjsonValue::Object({
+                let mut m = typeferry_ejson::value::EjsonMap::new();
+                m.insert(
+                    "t".into(),
+                    EjsonValue::String(MessageType::Pong.as_str().into()),
+                );
+                m
+            }));
+            socket.send(pong).await;
         }
         "pong" => {
             pong_flag.store(true, Ordering::Relaxed);
@@ -292,11 +524,10 @@ async fn handle_rpc(
                 "id": id,
                 "result": result,
             });
-            socket
-                .send(typeferry_ejson::stable_stringify::stringify_noncanonical(
-                    &payload,
-                ))
-                .await;
+            match typeferry_ejson::stable_stringify::try_stringify_noncanonical(&payload) {
+                Ok(text) => socket.send(text).await,
+                Err(_) => send_rpc_error(socket, &id, INTERNAL_ERROR, None).await,
+            }
         }
         Err(TypeFerryError::Public(err)) => {
             send_rpc_error(socket, &id, &err.message, None).await;
@@ -304,7 +535,12 @@ async fn handle_rpc(
         Err(TypeFerryError::Schema(err)) => {
             send_rpc_error(socket, &id, &err.message, Some(err.errors)).await;
         }
-        Err(_) => {
+        Err(err) => {
+            if m.is_sensitive {
+                tracing::error!(method = %method, "Sensitive RPC method failed");
+            } else {
+                tracing::error!(method = %method, error = %err, "RPC method failed");
+            }
             send_rpc_error(socket, &id, INTERNAL_ERROR, None).await;
         }
     }
@@ -324,11 +560,15 @@ async fn send_rpc_error(
     if let Some(errs) = errors {
         payload["errors"] = json!(errs);
     }
-    socket
-        .send(typeferry_ejson::stable_stringify::stringify_noncanonical(
-            &payload,
-        ))
-        .await;
+    let text = match typeferry_ejson::stable_stringify::try_stringify_noncanonical(&payload) {
+        Ok(encoded) => encoded,
+        Err(_) => typeferry_ejson::stable_stringify::stringify_noncanonical(&json!({
+            "t": MessageType::RpcResponse.as_str(),
+            "id": id,
+            "error": INTERNAL_ERROR,
+        })),
+    };
+    socket.send(text).await;
 }
 
 // ---------------------------------------------------------------------------

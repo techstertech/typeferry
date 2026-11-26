@@ -15,3 +15,4 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
+aws-lc-rs = { workspace = true }

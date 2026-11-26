@@ -307,6 +307,7 @@ async fn websocket_origin_admission_precedes_authentication() {
             typeferry_ws::WebSocketOptions {
                 origins,
                 allow_originless,
+                ..Default::default()
             },
         )
         .await;
@@ -355,6 +356,7 @@ async fn originless_optins_are_independent_between_transports() {
             typeferry_ws::WebSocketOptions {
                 origins: origins.clone(),
                 allow_originless: allow_ws,
+                ..Default::default()
             },
         )
         .await;
@@ -363,6 +365,7 @@ async fn originless_optins_are_independent_between_transports() {
             typeferry_http::HttpOptions {
                 origins,
                 allow_originless: allow_http,
+                ..Default::default()
             },
         );
         let response = http

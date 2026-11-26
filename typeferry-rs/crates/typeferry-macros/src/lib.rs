@@ -47,6 +47,7 @@ use syn::{Expr, Ident, ItemFn, Lit, LitStr, Meta, Token, parse_macro_input};
 struct MethodAttrs {
     name: Option<LitStr>,
     protected: bool,
+    sensitive: bool,
     cached: bool,
     max_age_ms: Option<Expr>,
 }
@@ -62,6 +63,9 @@ impl Parse for MethodAttrs {
             match &meta {
                 Meta::Path(path) if path.is_ident("protected") => {
                     attrs.protected = true;
+                }
+                Meta::Path(path) if path.is_ident("sensitive") => {
+                    attrs.sensitive = true;
                 }
                 Meta::Path(path) if path.is_ident("cached") => {
                     attrs.cached = true;
@@ -119,6 +123,7 @@ pub fn method(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! { stringify!(#fn_name) },
     };
     let protected = attrs.protected;
+    let sensitive = attrs.sensitive;
     let cached = attrs.cached;
     let max_age_ms = match &attrs.max_age_ms {
         Some(expr) => quote! { Some(#expr) },
@@ -150,6 +155,7 @@ pub fn method(attr: TokenStream, item: TokenStream) -> TokenStream {
             );
             let opts = ::typeferry_runtime::MethodOptions {
                 protected: #protected,
+                sensitive: #sensitive,
                 cache: #cached,
                 max_age_ms: #max_age_ms,
                 middleware: ::std::vec::Vec::new(),

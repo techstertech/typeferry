@@ -115,6 +115,11 @@ pub mod base64 {
             } else {
                 0
             };
+            // Reject non-canonical non-zero unused padding bits (RFC 4648 §3.5).
+            if (chunk_padding == 1 && (c2 & 0x03) != 0) || (chunk_padding == 2 && (c1 & 0x0F) != 0)
+            {
+                return Err(Base64Error::InvalidChar);
+            }
             let decoded =
                 ((c0 as u32) << 18) | ((c1 as u32) << 12) | ((c2 as u32) << 6) | c3 as u32;
 
@@ -136,8 +141,18 @@ pub mod stable_stringify {
 
     use serde_json::{Map, Value};
 
+    pub const MAX_STRINGIFY_DEPTH: usize = 128;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    #[error("Maximum JSON nesting depth exceeded")]
+    pub struct StringifyDepthError;
+
+    pub fn try_sort_value(value: Value) -> Result<Value, StringifyDepthError> {
+        order_value(value, true, 0)
+    }
+
     pub fn sort_value(value: Value) -> Value {
-        order_value(value, true)
+        try_sort_value(value).expect("JSON nesting depth exceeded")
     }
 
     fn array_index(key: &str) -> Option<u32> {
@@ -146,19 +161,27 @@ pub mod stable_stringify {
         (index != u32::MAX && index.to_string() == key).then_some(index)
     }
 
-    fn order_value(value: Value, canonical: bool) -> Value {
+    fn order_value(
+        value: Value,
+        canonical: bool,
+        depth: usize,
+    ) -> Result<Value, StringifyDepthError> {
+        if depth > MAX_STRINGIFY_DEPTH {
+            return Err(StringifyDepthError);
+        }
         match value {
-            Value::Array(items) => Value::Array(
-                items
-                    .into_iter()
-                    .map(|item| order_value(item, canonical))
-                    .collect(),
-            ),
+            Value::Array(items) => {
+                let mut mapped = Vec::with_capacity(items.len());
+                for item in items {
+                    mapped.push(order_value(item, canonical, depth + 1)?);
+                }
+                Ok(Value::Array(mapped))
+            }
             Value::Object(map) => {
-                let mut entries: Vec<(String, Value)> = map
-                    .into_iter()
-                    .map(|(key, value)| (key, order_value(value, canonical)))
-                    .collect();
+                let mut entries: Vec<(String, Value)> = Vec::with_capacity(map.len());
+                for (key, value) in map {
+                    entries.push((key, order_value(value, canonical, depth + 1)?));
+                }
 
                 // JavaScript enumerates array indices numerically even when
                 // canonical insertion requested a different lexical order.
@@ -171,15 +194,24 @@ pub mod stable_stringify {
                 });
 
                 let sorted: Map<String, Value> = entries.into_iter().collect();
-                Value::Object(sorted)
+                Ok(Value::Object(sorted))
             }
-            other => other,
+            other => Ok(other),
         }
     }
 
+    pub fn try_stringify(value: &Value) -> Result<String, StringifyDepthError> {
+        let sorted = try_sort_value(value.clone())?;
+        Ok(serde_json::to_string(&sorted).expect("canonical JSON serialization is total"))
+    }
+
     pub fn stringify(value: &Value) -> String {
-        serde_json::to_string(&sort_value(value.clone()))
-            .expect("canonical JSON serialization is total")
+        try_stringify(value).expect("JSON nesting depth exceeded")
+    }
+
+    pub fn try_stringify_noncanonical(value: &Value) -> Result<String, StringifyDepthError> {
+        let ordered = order_value(value.clone(), false, 0)?;
+        Ok(serde_json::to_string(&ordered).expect("ordinary JSON serialization is total"))
     }
 
     /**
@@ -188,8 +220,7 @@ pub mod stable_stringify {
      * form rather than canonical sorting.
      */
     pub fn stringify_noncanonical(value: &Value) -> String {
-        serde_json::to_string(&order_value(value.clone(), false))
-            .expect("ordinary JSON serialization is total")
+        try_stringify_noncanonical(value).expect("JSON nesting depth exceeded")
     }
 }
 

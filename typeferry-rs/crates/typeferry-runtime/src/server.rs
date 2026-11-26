@@ -46,12 +46,13 @@ pub struct Server {
     pub channels: RwLock<HashMap<String, Arc<ServerChannel>>>,
     pub clients: RwLock<HashMap<String, Arc<ClientNode>>>,
     pub clients_by_user_id: RwLock<HashMap<String, HashSet<String>>>,
+    pub clients_by_socket: Arc<RwLock<HashMap<u64, Arc<ClientNode>>>>,
     user_by_client_uuid: RwLock<HashMap<String, String>>,
     allowed_context_keys: RwLock<HashSet<String>>,
     pub rooms: Arc<RwLock<Option<Arc<RoomRegistry>>>>,
     pub is_auth_enabled: RwLock<bool>,
     pub auth_fn: RwLock<Option<AuthFn>>,
-    pub channel_auth: RwLock<Option<ChannelAuthFn>>,
+    pub channel_auth: Arc<RwLock<Option<ChannelAuthFn>>>,
 }
 
 const MAX_CACHED_CHANNELS: usize = 10_000;
@@ -66,20 +67,23 @@ impl Server {
             channels: RwLock::new(HashMap::new()),
             clients: RwLock::new(HashMap::new()),
             clients_by_user_id: RwLock::new(HashMap::new()),
+            clients_by_socket: Arc::new(RwLock::new(HashMap::new())),
             user_by_client_uuid: RwLock::new(HashMap::new()),
             allowed_context_keys: RwLock::new(HashSet::new()),
             rooms: Arc::new(RwLock::new(None)),
             is_auth_enabled: RwLock::new(false),
             auth_fn: RwLock::new(None),
-            channel_auth: RwLock::new(None),
+            channel_auth: Arc::new(RwLock::new(None)),
         });
 
         // Install the NO_CHANNEL anchor so consumers can retrieve it via
         // `channel(NO_CHANNEL)`.
-        let anchor = Arc::new(ServerChannel::new(
+        let anchor = Arc::new(ServerChannel::with_revalidation(
             NO_CHANNEL,
             server.events.clone(),
             server.rooms.clone(),
+            server.channel_auth.clone(),
+            server.clients_by_socket.clone(),
         ));
         server
             .channels
@@ -113,6 +117,29 @@ impl Server {
     }
 
     /**
+     * Normalize an authentication callback value using JavaScript truthiness.
+     */
+    pub fn normalize_auth_result(node: &ClientNode, result: Value) -> Value {
+        let truthy = match &result {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+            Value::String(value) => !value.is_empty(),
+            Value::Array(_) | Value::Object(_) => true,
+        };
+
+        if truthy {
+            result
+        } else {
+            // Normalize JS falsey scalars so neither adapter can mistake zero
+            // or an empty string for an authenticated principal.
+            node.set_authenticated(false);
+            node.set_context(Value::Null);
+            Value::Null
+        }
+    }
+
+    /**
      * Invoke the registered callback using JavaScript authentication truthiness.
      * Rejection clears the node's principal and returns Null. Truthy containers
      * and scalars remain intact for the transport to attach as context.
@@ -128,24 +155,7 @@ impl Server {
             Some(auth) => auth(node.clone(), context).await,
             None => Value::Null,
         };
-        let truthy = match &result {
-            Value::Null => false,
-            Value::Bool(value) => *value,
-            Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-            Value::String(value) => !value.is_empty(),
-            Value::Array(_) | Value::Object(_) => true,
-        };
-
-        if truthy {
-            result
-        } else {
-            // Both transports consume this result. Normalize JS falsey scalars
-            // here so neither adapter can mistake zero or an empty string for
-            // an authenticated principal.
-            node.set_authenticated(false);
-            node.set_context(Value::Null);
-            Value::Null
-        }
+        Self::normalize_auth_result(&node, result)
     }
 
     pub fn add_method(&self, name: &str, handler: RpcHandler, opts: MethodOptions) {
@@ -214,10 +224,12 @@ impl Server {
                 return c.clone();
             }
         }
-        let new_channel = Arc::new(ServerChannel::new(
+        let new_channel = Arc::new(ServerChannel::with_revalidation(
             name,
             self.events.clone(),
             self.rooms.clone(),
+            self.channel_auth.clone(),
+            self.clients_by_socket.clone(),
         ));
         let mut channels = self.channels.write().expect("channels poisoned");
         if let Some(existing) = channels.get(name) {
@@ -227,6 +239,32 @@ impl Server {
             channels.insert(name.to_string(), new_channel.clone());
         }
         new_channel
+    }
+
+    /**
+     * Resolve an existing cached channel or return a transient unstored
+     * `ServerChannel` so untrusted cluster traffic cannot grow `channels`.
+     */
+    pub fn transient_channel(&self, name: &str) -> Arc<ServerChannel> {
+        if name.is_empty() || name == NO_CHANNEL {
+            return self
+                .channels
+                .read()
+                .expect("channels poisoned")
+                .get(NO_CHANNEL)
+                .cloned()
+                .expect("NO_CHANNEL anchor missing");
+        }
+        if let Some(existing) = self.channels.read().expect("channels poisoned").get(name) {
+            return existing.clone();
+        }
+        Arc::new(ServerChannel::with_revalidation(
+            name,
+            self.events.clone(),
+            self.rooms.clone(),
+            self.channel_auth.clone(),
+            self.clients_by_socket.clone(),
+        ))
     }
 
     pub fn add_event(&self, event: Arc<Event>) {
@@ -246,6 +284,12 @@ impl Server {
             .write()
             .expect("clients poisoned")
             .insert(uuid.clone(), node.clone());
+        if let Some(socket) = node.socket.as_ref() {
+            self.clients_by_socket
+                .write()
+                .expect("clients_by_socket poisoned")
+                .insert(socket.id(), node.clone());
+        }
         self.refresh_client_user_index(&node);
     }
 
@@ -262,6 +306,12 @@ impl Server {
                 node.set_id(&uuid);
             }
             clients.insert(uuid, node.clone());
+        }
+        if let Some(socket) = node.socket.as_ref() {
+            self.clients_by_socket
+                .write()
+                .expect("clients_by_socket poisoned")
+                .insert(socket.id(), node.clone());
         }
         self.refresh_client_user_index(&node);
     }
@@ -332,6 +382,18 @@ impl Server {
             }
         };
         if removed {
+            if let Some(socket) = node.socket.as_ref() {
+                let mut by_socket = self
+                    .clients_by_socket
+                    .write()
+                    .expect("clients_by_socket poisoned");
+                if by_socket
+                    .get(&socket.id())
+                    .is_some_and(|existing| std::ptr::eq(Arc::as_ptr(existing), node))
+                {
+                    by_socket.remove(&socket.id());
+                }
+            }
             self.remove_client_from_user_index(node);
         }
     }

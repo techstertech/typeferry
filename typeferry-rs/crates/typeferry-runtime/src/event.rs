@@ -17,6 +17,7 @@ pub struct EventOptions {
     pub user: bool,
     pub cluster: bool,
     pub exclude_originator: bool,
+    pub revalidate_on_delivery: bool,
     pub should_subscribe: Option<ShouldSubscribe>,
 }
 
@@ -26,6 +27,7 @@ pub struct Event {
     pub is_protected: bool,
     pub cluster: bool,
     pub exclude_originator: bool,
+    pub revalidate_on_delivery: bool,
     pub should_subscribe: ShouldSubscribe,
 }
 
@@ -54,6 +56,7 @@ impl Event {
             is_protected: opts.protected || is_user,
             cluster: opts.cluster,
             exclude_originator: opts.exclude_originator,
+            revalidate_on_delivery: opts.revalidate_on_delivery,
             should_subscribe,
         })
     }
