@@ -6,15 +6,35 @@ fn default_secure() -> bool {
         .unwrap_or(false)
 }
 
+fn sanitize_cookie_name(name: &str) -> String {
+    name.chars()
+        .filter(|&c| !c.is_control() && c != ';' && c != '=' && !c.is_whitespace())
+        .collect()
+}
+
+fn sanitize_cookie_path(path: &str) -> String {
+    let cleaned: String = path
+        .chars()
+        .filter(|&c| !c.is_control() && c != ';')
+        .collect();
+    if cleaned.is_empty() {
+        "/".into()
+    } else {
+        cleaned
+    }
+}
+
 pub fn set_refresh_token_cookie(token: &str, options: &CookieOptions) -> String {
     let max_age = options.max_age_days * 24 * 60 * 60;
     let secure = options.secure.unwrap_or_else(default_secure);
     let encoded = urlencode(token);
+    let name = sanitize_cookie_name(&options.name);
+    let path = sanitize_cookie_path(&options.path);
 
     let mut parts = vec![
-        format!("{}={}", options.name, encoded),
+        format!("{name}={encoded}"),
         "HttpOnly".into(),
-        format!("Path={}", options.path),
+        format!("Path={path}"),
         format!("Max-Age={max_age}"),
         format!("SameSite={}", options.same_site.as_str()),
     ];
@@ -26,6 +46,8 @@ pub fn set_refresh_token_cookie(token: &str, options: &CookieOptions) -> String 
 
 pub fn clear_refresh_token_cookie(name: &str, path: &str, secure: Option<bool>) -> String {
     let secure = secure.unwrap_or_else(default_secure);
+    let name = sanitize_cookie_name(name);
+    let path = sanitize_cookie_path(path);
     let mut parts = vec![
         format!("{name}="),
         "HttpOnly".into(),
@@ -55,10 +77,14 @@ fn urlencode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_flags() {
-        // SAFETY: test is single-threaded; env access is scoped to this test.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized under ENV_LOCK so parallel unit tests never race on NODE_ENV.
         unsafe { std::env::remove_var("NODE_ENV") };
         let header = set_refresh_token_cookie("tok", &CookieOptions::new("bf_refresh", 7));
         assert!(header.starts_with("bf_refresh=tok"));
@@ -67,6 +93,18 @@ mod tests {
         assert!(header.contains("Max-Age=604800"));
         assert!(header.contains("SameSite=Lax"));
         assert!(!header.contains("Secure"));
+    }
+
+    #[test]
+    fn sanitizes_attribute_injection_characters() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mut opts = CookieOptions::new("bad;name=\r\nEvil", 7);
+        opts.path = "/;Domain=evil.test\r\n".into();
+        let header = set_refresh_token_cookie("tok", &opts);
+        assert!(header.starts_with("badnameEvil=tok"));
+        assert!(!header.contains('\r'));
+        assert!(!header.contains('\n'));
+        assert!(header.contains("Path=/Domain=evil.test;"));
     }
 
     #[test]

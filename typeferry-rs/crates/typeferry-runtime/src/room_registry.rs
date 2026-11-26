@@ -85,6 +85,15 @@ impl RoomRegistry {
         inner.rooms.get(room).map(|m| m.len()).unwrap_or(0)
     }
 
+    pub fn socket_room_count(&self, socket: &dyn TypeFerrySocket) -> usize {
+        let inner = self.inner.read().expect("RoomRegistry lock poisoned");
+        inner
+            .socket_rooms
+            .get(&socket.id())
+            .map(|rooms| rooms.len())
+            .unwrap_or(0)
+    }
+
     /// Return the list of sockets to broadcast to, filtered by
     /// `exclude_id` and open state. The caller invokes `.send()` on
     /// each socket without holding the registry lock.

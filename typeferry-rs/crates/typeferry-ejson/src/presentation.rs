@@ -39,21 +39,7 @@ impl Presentation {
 
     /// Generate a fresh UUID v4 (matches TS / Python output).
     pub fn uuid() -> String {
-        // We avoid pulling in the `uuid` crate at this layer — callers
-        // that need UUIDs already depend on it for other reasons.
-        // Emit a compact time+random hex string for standalone use.
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let micros = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_micros())
-            .unwrap_or(0);
-        let mut rand_bytes = [0u8; 8];
-        for (i, b) in rand_bytes.iter_mut().enumerate() {
-            *b = ((micros >> (i * 8)) & 0xFF) as u8;
-        }
-        // Simple mixing — not cryptographic. Callers doing auth use
-        // the uuid crate directly from `typeferry-runtime`.
-        format!("{:x}-{:08x}", micros, u64::from_le_bytes(rand_bytes))
+        uuid::Uuid::new_v4().to_string()
     }
 }
 
@@ -88,4 +74,17 @@ fn validate_binary_tags(value: &Value) -> Result<(), serde_json::Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uuid_returns_v4_string() {
+        let id = Presentation::uuid();
+        assert_eq!(id.len(), 36);
+        assert_eq!(&id[14..15], "4");
+        assert_ne!(id, Presentation::uuid());
+    }
 }

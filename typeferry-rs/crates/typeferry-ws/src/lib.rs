@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use typeferry_ejson::{EjsonValue, Presentation};
 use typeferry_protocol::{
     AUTH_TIMEOUT_MS, MAX_META_SIZE, MAX_UUID_LENGTH, MessageType, PING_INTERVAL_MS,
@@ -59,7 +59,12 @@ async fn admit_origin(
     request: Request,
     next: Next,
 ) -> Response {
-    let admitted = match request.headers().get(header::ORIGIN) {
+    let mut origin_iter = request.headers().get_all(header::ORIGIN).iter();
+    let first = origin_iter.next();
+    if origin_iter.next().is_some() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let admitted = match first {
         Some(origin) => origin
             .to_str()
             .is_ok_and(|origin| options.allows(Some(origin))),
@@ -83,12 +88,16 @@ struct UpgradeQuery {
     meta: Option<String>,
 }
 
+const MAX_WS_MESSAGE_BYTES: usize = 1024 * 1024;
+
 async fn upgrade(
     ws: WebSocketUpgrade,
     State(server): State<Arc<Server>>,
     Query(query): Query<UpgradeQuery>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_connection(server, socket, query))
+    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_connection(server, socket, query))
 }
 
 async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: UpgradeQuery) {
@@ -112,7 +121,7 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    server.add_client(node.clone());
+    server.add_ws_client(node.clone());
 
     // Run auth if a token was passed; otherwise emit `authenticated:false`
     // immediately per PROTOCOL.md §2.2.2.
@@ -138,6 +147,9 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
 
         node.set_authenticated(!auth_result.is_null());
         node.set_context(auth_result);
+        if node.is_authenticated() {
+            server.refresh_client_user_index(&node);
+        }
     }
     node.emit_auth_result(node.is_authenticated()).await;
 
@@ -314,19 +326,42 @@ async fn send_rpc_error(
 // axum WebSocket adapter implementing TypeFerrySocket.
 // ---------------------------------------------------------------------------
 
+const OUTBOUND_QUEUE_CAP: usize = 256;
+const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct AxumSocket {
     id: u64,
-    sink: Mutex<Option<SplitSink<WebSocket, Message>>>,
+    tx: RwLock<Option<mpsc::Sender<String>>>,
     state: RwLock<u8>,
 }
 
 impl AxumSocket {
-    fn new(sink: SplitSink<WebSocket, Message>) -> Arc<Self> {
-        Arc::new(Self {
+    fn new(mut sink: SplitSink<WebSocket, Message>) -> Arc<Self> {
+        let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE_CAP);
+        let socket = Arc::new(Self {
             id: SOCKET_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-            sink: Mutex::new(Some(sink)),
+            tx: RwLock::new(Some(tx)),
             state: RwLock::new(typeferry_runtime::SocketState::OPEN),
-        })
+        });
+        let writer_socket = Arc::downgrade(&socket);
+        tokio::spawn(async move {
+            while let Some(data) = rx.recv().await {
+                let res = tokio::time::timeout(
+                    SOCKET_WRITE_TIMEOUT,
+                    sink.send(Message::Text(data.into())),
+                )
+                .await;
+                if !matches!(res, Ok(Ok(()))) {
+                    if let Some(s) = writer_socket.upgrade() {
+                        s.mark_closed();
+                        *s.tx.write().expect("tx poisoned") = None;
+                    }
+                    break;
+                }
+            }
+            let _ = tokio::time::timeout(SOCKET_WRITE_TIMEOUT, sink.close()).await;
+        });
+        socket
     }
 
     fn mark_closed(&self) {
@@ -341,20 +376,18 @@ impl TypeFerrySocket for AxumSocket {
     }
 
     async fn send(&self, data: String) {
-        let mut guard = self.sink.lock().await;
-        if let Some(sink) = guard.as_mut()
-            && sink.send(Message::Text(data.into())).await.is_err()
+        let tx = self.tx.read().expect("tx poisoned").clone();
+        if let Some(sender) = tx
+            && sender.try_send(data).is_err()
         {
             self.mark_closed();
+            *self.tx.write().expect("tx poisoned") = None;
         }
     }
 
     async fn close(&self) {
         self.mark_closed();
-        let mut guard = self.sink.lock().await;
-        if let Some(mut sink) = guard.take() {
-            let _ = sink.close().await;
-        }
+        *self.tx.write().expect("tx poisoned") = None;
     }
 
     fn id(&self) -> u64 {

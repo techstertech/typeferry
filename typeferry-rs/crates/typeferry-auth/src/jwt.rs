@@ -1,10 +1,14 @@
 use crate::types::{AccessTokenPayload, AuthConfig};
+use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 
 pub fn sign_access_token(
     payload: &AccessTokenPayload,
     config: &AuthConfig,
 ) -> Result<String, jsonwebtoken::errors::Error> {
+    if config.secret.is_empty() {
+        return Err(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat.into());
+    }
     let header = Header::new(config.algorithm.as_jwt());
     encode(
         &header,
@@ -14,8 +18,12 @@ pub fn sign_access_token(
 }
 
 pub fn verify_access_token(token: &str, config: &AuthConfig) -> Option<AccessTokenPayload> {
+    if config.secret.is_empty() {
+        return None;
+    }
     let clean = strip_bearer(token);
     let mut validation = Validation::new(config.algorithm.as_jwt());
+    validation.leeway = 0;
     validation.set_required_spec_claims(&["exp", "iat"]);
     let decoded = decode::<AccessTokenPayload>(
         clean,
@@ -23,7 +31,16 @@ pub fn verify_access_token(token: &str, config: &AuthConfig) -> Option<AccessTok
         &validation,
     )
     .ok()?;
-    Some(decoded.claims)
+    let claims = decoded.claims;
+    if claims.user_id.is_empty() || claims.session_id.is_empty() {
+        return None;
+    }
+    let now = Utc::now().timestamp();
+    let max_age = (config.access_token_expiry_minutes as i64) * 60;
+    if now - claims.iat > max_age || claims.iat > now + 5 {
+        return None;
+    }
+    Some(claims)
 }
 
 /// Decode without verifying — inspection only. Callers MUST NOT trust.
@@ -34,11 +51,11 @@ pub fn decode_token(token: &str) -> Option<AccessTokenPayload> {
 }
 
 fn strip_bearer(token: &str) -> &str {
-    if let Some(rest) = token.strip_prefix("Bearer ") {
-        return rest;
-    }
-    if let Some(rest) = token.strip_prefix("bearer ") {
-        return rest;
+    if token
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+    {
+        return &token[7..];
     }
     token
 }
@@ -105,6 +122,28 @@ mod tests {
         let token = sign_access_token(&payload(), &signing_config).unwrap();
 
         assert!(verify_access_token(&token, &config()).is_none());
+    }
+
+    #[test]
+    fn case_insensitive_bearer_and_leeway_and_max_age_enforced() {
+        let token = sign_access_token(&payload(), &config()).unwrap();
+        assert!(verify_access_token(&format!("BEARER {token}"), &config()).is_some());
+
+        let mut expired = payload();
+        expired.iat -= 900;
+        expired.exp = Utc::now().timestamp() - 5;
+        let expired_tok = sign_access_token(&expired, &config()).unwrap();
+        assert!(verify_access_token(&expired_tok, &config()).is_none());
+
+        let mut stale = payload();
+        stale.iat = Utc::now().timestamp() - 2000;
+        stale.exp = Utc::now().timestamp() + 2000;
+        let stale_tok = sign_access_token(&stale, &config()).unwrap();
+        assert!(verify_access_token(&stale_tok, &config()).is_none());
+
+        let empty_cfg = AuthConfig::new("");
+        assert!(sign_access_token(&payload(), &empty_cfg).is_err());
+        assert!(verify_access_token(&token, &empty_cfg).is_none());
     }
 
     #[test]

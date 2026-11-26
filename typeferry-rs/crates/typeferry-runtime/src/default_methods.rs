@@ -41,21 +41,47 @@ pub(crate) fn register(server: &Arc<Server>) {
     );
 }
 
+const MAX_EVENTS_PER_CALL: usize = 256;
+const MAX_CHANNEL_BYTES: usize = 256;
+const MAX_ROOMS_PER_CLIENT: usize = 1024;
+
 /// `rpc:on` — subscribe a connected client to a list of events on a
 /// channel. Returns `{ event_name: bool }` per-event success.
 fn rpc_on(server: Arc<Server>) -> RpcHandler {
     Arc::new(move |node: Arc<ClientNode>, params: Value| {
         let server = server.clone();
         async move {
-            let events = events_list(&params);
+            let raw_len = params
+                .get("events")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
             let channel = channel_or_default(&params);
+            if raw_len > MAX_EVENTS_PER_CALL || channel.len() > MAX_CHANNEL_BYTES {
+                return Ok(Value::Object(Map::new())) as BoxResult;
+            }
 
+            let events = events_list(&params);
             if events.is_empty() {
                 return Ok(Value::Object(Map::new())) as BoxResult;
             }
 
+            let channel_auth = server
+                .channel_auth
+                .read()
+                .expect("channel_auth poisoned")
+                .clone();
+            let channel_allowed = match channel_auth {
+                Some(checker) => checker(node.clone(), channel.clone()).await,
+                None => true,
+            };
+
             let mut result = Map::new();
             for event_name in events {
+                if !channel_allowed {
+                    result.insert(event_name, Value::Bool(false));
+                    continue;
+                }
                 let allowed = can_subscribe(&server, &node, &event_name, &channel).await;
                 result.insert(event_name, Value::Bool(allowed));
             }
@@ -101,13 +127,18 @@ fn rpc_off(server: Arc<Server>) -> RpcHandler {
     })
 }
 
-/// `rpc:logout` — clear auth state on the node. Always returns `true`.
-fn rpc_logout(_server: Arc<Server>) -> RpcHandler {
+/// `rpc:logout` — leave rooms and clear auth state on the node. Always returns `true`.
+fn rpc_logout(server: Arc<Server>) -> RpcHandler {
     Arc::new(move |node: Arc<ClientNode>, _params: Value| {
+        let server = server.clone();
         async move {
+            if let Some(socket) = node.socket.as_ref()
+                && let Some(rooms) = server.rooms.read().ok().and_then(|opt| opt.clone())
+            {
+                rooms.leave_all(&**socket);
+            }
+            server.remove_client_from_user_index(&node);
             node.set_authenticated(false);
-            *node.context.write().expect("context poisoned") = Value::Null;
-            *node.user_id.write().expect("user_id poisoned") = None;
             Ok(json!(true)) as BoxResult
         }
         .boxed()
@@ -162,12 +193,19 @@ async fn can_subscribe(
     if !allowed {
         return false;
     }
+    if event.is_protected && !node.is_authenticated() {
+        return false;
+    }
     let Some(socket) = node.socket.as_ref().cloned() else {
         return false;
     };
     let Some(rooms) = server.rooms.read().ok().and_then(|opt| opt.clone()) else {
         return false;
     };
-    rooms.join(socket, room_name(channel, event_name));
+    let room = room_name(channel, event_name);
+    if !rooms.has(&*socket, &room) && rooms.socket_room_count(&*socket) >= MAX_ROOMS_PER_CLIENT {
+        return false;
+    }
+    rooms.join(socket, room);
     true
 }

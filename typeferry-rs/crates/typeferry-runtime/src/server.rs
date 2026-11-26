@@ -18,6 +18,8 @@ use uuid::Uuid;
 /// Returns a truthy `Value::Object` (the user context) on success,
 /// `Value::Null` / `Value::Bool(false)` on failure.
 pub type AuthFn = Arc<dyn Fn(Arc<ClientNode>, Value) -> BoxFuture<'static, Value> + Send + Sync>;
+pub type ChannelAuthFn =
+    Arc<dyn Fn(Arc<ClientNode>, String) -> BoxFuture<'static, bool> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ServerOptions {
@@ -47,6 +49,7 @@ pub struct Server {
     pub rooms: Arc<RwLock<Option<Arc<RoomRegistry>>>>,
     pub is_auth_enabled: RwLock<bool>,
     pub auth_fn: RwLock<Option<AuthFn>>,
+    pub channel_auth: RwLock<Option<ChannelAuthFn>>,
 }
 
 impl Server {
@@ -62,6 +65,7 @@ impl Server {
             rooms: Arc::new(RwLock::new(None)),
             is_auth_enabled: RwLock::new(false),
             auth_fn: RwLock::new(None),
+            channel_auth: RwLock::new(None),
         });
 
         // Install the NO_CHANNEL anchor so consumers can retrieve it via
@@ -96,6 +100,10 @@ impl Server {
             .is_auth_enabled
             .write()
             .expect("is_auth_enabled poisoned") = true;
+    }
+
+    pub fn set_channel_authorization(&self, checker: ChannelAuthFn) {
+        *self.channel_auth.write().expect("channel_auth poisoned") = Some(checker);
     }
 
     /**
@@ -191,6 +199,28 @@ impl Server {
             .write()
             .expect("clients poisoned")
             .insert(uuid.clone(), node.clone());
+        self.refresh_client_user_index(&node);
+    }
+
+    /// Register a WebSocket handshake node, assigning a fresh UUID if another live client holds `uuid`.
+    pub fn add_ws_client(&self, node: Arc<ClientNode>) {
+        let mut uuid = node.uuid();
+        {
+            let mut clients = self.clients.write().expect("clients poisoned");
+            while clients
+                .get(&uuid)
+                .is_some_and(|existing| !Arc::ptr_eq(existing, &node))
+            {
+                uuid = Uuid::new_v4().to_string();
+                node.set_id(&uuid);
+            }
+            clients.insert(uuid, node.clone());
+        }
+        self.refresh_client_user_index(&node);
+    }
+
+    pub fn refresh_client_user_index(&self, node: &ClientNode) {
+        let uuid = node.uuid();
         if let Some(user_id) = node.user_id.read().ok().and_then(|opt| opt.clone()) {
             self.clients_by_user_id
                 .write()
@@ -201,12 +231,8 @@ impl Server {
         }
     }
 
-    pub fn delete_client(&self, node: &ClientNode) {
+    pub fn remove_client_from_user_index(&self, node: &ClientNode) {
         let uuid = node.uuid();
-        self.clients
-            .write()
-            .expect("clients poisoned")
-            .remove(&uuid);
         if let Some(user_id) = node.user_id.read().ok().and_then(|opt| opt.clone()) {
             let mut index = self
                 .clients_by_user_id
@@ -218,6 +244,25 @@ impl Server {
                     index.remove(&user_id);
                 }
             }
+        }
+    }
+
+    pub fn delete_client(&self, node: &ClientNode) {
+        let uuid = node.uuid();
+        let removed = {
+            let mut clients = self.clients.write().expect("clients poisoned");
+            if clients
+                .get(&uuid)
+                .is_some_and(|existing| std::ptr::eq(Arc::as_ptr(existing), node))
+            {
+                clients.remove(&uuid);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            self.remove_client_from_user_index(node);
         }
     }
 

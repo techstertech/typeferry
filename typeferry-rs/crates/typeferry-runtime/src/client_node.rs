@@ -55,6 +55,10 @@ impl ClientNode {
             .authenticated
             .write()
             .expect("ClientNode.authenticated poisoned") = value;
+        if !value {
+            *self.context.write().expect("ClientNode.context poisoned") = Value::Null;
+            *self.user_id.write().expect("ClientNode.user_id poisoned") = None;
+        }
     }
 
     pub fn set_context(&self, ctx: Value) {
@@ -66,12 +70,13 @@ impl ClientNode {
         };
         *self.context.write().expect("ClientNode.context poisoned") = resolved.clone();
 
-        // Derive user_id from context.user._id if present.
+        // Derive user_id from context.user._id if present and non-empty string.
         let id = if authenticated {
             resolved.get("user").and_then(|user| {
                 user.get("_id")
                     .or_else(|| user.get("id"))
                     .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
             })
         } else {

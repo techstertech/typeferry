@@ -3,18 +3,27 @@ use crate::types::{AccessTokenPayload, AuthConfig, DeviceInfo, Session, TokenPai
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+#[derive(Default)]
+struct SessionStore {
+    sessions: HashMap<String, Session>,
+    grace_started: HashMap<String, Instant>,
+}
 
 pub struct InMemorySessionManager {
     config: AuthConfig,
-    sessions: Mutex<HashMap<String, Session>>,
+    store: Mutex<SessionStore>,
 }
+
+const LAZY_PRUNE_THRESHOLD: usize = 10_000;
 
 impl InMemorySessionManager {
     pub fn new(config: AuthConfig) -> Self {
         Self {
             config,
-            sessions: Mutex::new(HashMap::new()),
+            store: Mutex::new(SessionStore::default()),
         }
     }
 
@@ -40,7 +49,13 @@ impl InMemorySessionManager {
             replaced_by: None,
             used_at: None,
         };
-        self.sessions.lock().unwrap().insert(token.clone(), session);
+        {
+            let mut store = self.store.lock().unwrap();
+            if store.sessions.len() >= LAZY_PRUNE_THRESHOLD {
+                Self::prune_locked(&mut store);
+            }
+            store.sessions.insert(token.clone(), session);
+        }
         self.build_pair(token, user_id, &session_id)
     }
 
@@ -49,8 +64,8 @@ impl InMemorySessionManager {
         refresh_token: &str,
         device_info: Option<DeviceInfo>,
     ) -> Option<TokenPair> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions.get(refresh_token)?.clone();
+        let mut store = self.store.lock().unwrap();
+        let session = store.sessions.get(refresh_token)?.clone();
         if session.is_revoked {
             return None;
         }
@@ -59,24 +74,29 @@ impl InMemorySessionManager {
             return None;
         }
 
-        // Reuse / replaced path. Track at microsecond granularity so a
-        // 0-second grace window still fires for any observable reuse gap.
+        // Reuse / replaced path guarded by monotonic grace tracking.
         if let Some(replaced) = &session.replaced_by {
-            let grace_us = (self.config.rotation_grace_period_seconds as u128) * 1_000_000;
-            let now_us = (Utc::now().timestamp_micros()) as u128;
-            let usedat = session.used_at.unwrap_or(0);
-            if now_us.saturating_sub(usedat) > grace_us {
+            let grace = Duration::from_secs(self.config.rotation_grace_period_seconds);
+            let within_grace = !grace.is_zero()
+                && store
+                    .grace_started
+                    .get(refresh_token)
+                    .is_some_and(|started| started.elapsed() <= grace);
+            if !within_grace {
                 // Out of grace — revoke family.
                 let family = session.family_id.clone();
-                for s in sessions.values_mut() {
+                for s in store.sessions.values_mut() {
                     if s.family_id == family && !s.is_revoked {
                         s.is_revoked = true;
                     }
                 }
                 return None;
             }
-            let replacement = sessions.get(replaced)?.clone();
-            if replacement.is_revoked {
+            let replacement = store.sessions.get(replaced)?.clone();
+            if replacement.is_revoked
+                || replacement.replaced_by.is_some()
+                || now > replacement.expiration
+            {
                 return None;
             }
             return Some(self.build_pair(
@@ -101,18 +121,77 @@ impl InMemorySessionManager {
             replaced_by: None,
             used_at: None,
         };
-        if let Some(existing) = sessions.get_mut(refresh_token) {
+        if let Some(existing) = store.sessions.get_mut(refresh_token) {
             existing.replaced_by = Some(new_token.clone());
             existing.used_at = Some(Utc::now().timestamp_micros() as u128);
         }
-        sessions.insert(new_token.clone(), new_session);
+        store
+            .grace_started
+            .insert(refresh_token.to_string(), Instant::now());
+        store.sessions.insert(new_token.clone(), new_session);
         Some(self.build_pair(new_token, &session.user_id, &new_session_id))
     }
 
-    pub async fn revoke_all_user_sessions(&self, user_id: &str) -> usize {
-        let mut sessions = self.sessions.lock().unwrap();
+    pub async fn revoke_session(&self, session_id: &str) -> bool {
+        let mut store = self.store.lock().unwrap();
+        for s in store.sessions.values_mut() {
+            if s.id == session_id {
+                s.is_revoked = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub async fn revoke_family(&self, family_id: &str) -> usize {
+        let mut store = self.store.lock().unwrap();
         let mut count = 0;
-        for s in sessions.values_mut() {
+        for s in store.sessions.values_mut() {
+            if s.family_id == family_id && !s.is_revoked {
+                s.is_revoked = true;
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub async fn get_user_sessions(&self, user_id: &str) -> Vec<Session> {
+        let store = self.store.lock().unwrap();
+        let now = Utc::now().timestamp() as u64;
+        store
+            .sessions
+            .values()
+            .filter(|s| {
+                s.user_id == user_id
+                    && !s.is_revoked
+                    && s.replaced_by.is_none()
+                    && s.expiration > now
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn cleanup(&self) -> usize {
+        let mut store = self.store.lock().unwrap();
+        Self::prune_locked(&mut store)
+    }
+
+    fn prune_locked(store: &mut SessionStore) -> usize {
+        let now = Utc::now().timestamp() as u64;
+        let before = store.sessions.len();
+        store
+            .sessions
+            .retain(|_, s| !s.is_revoked && s.expiration > now);
+        store
+            .grace_started
+            .retain(|token, _| store.sessions.contains_key(token));
+        before.saturating_sub(store.sessions.len())
+    }
+
+    pub async fn revoke_all_user_sessions(&self, user_id: &str) -> usize {
+        let mut store = self.store.lock().unwrap();
+        let mut count = 0;
+        for s in store.sessions.values_mut() {
             if s.user_id == user_id && !s.is_revoked {
                 s.is_revoked = true;
                 count += 1;
@@ -174,5 +253,38 @@ mod tests {
         let _a = m.create_session("u1", None).await;
         let _b = m.create_session("u1", None).await;
         assert_eq!(m.revoke_all_user_sessions("u1").await, 2);
+    }
+
+    #[tokio::test]
+    async fn grace_reuse_rejects_superseded_and_expired_replacement() {
+        let m = InMemorySessionManager::new(config());
+        let first = m.create_session("u1", None).await;
+        let second = m.refresh_session(&first.refresh_token, None).await.unwrap();
+        let third = m
+            .refresh_session(&second.refresh_token, None)
+            .await
+            .unwrap();
+        assert!(
+            m.refresh_session(&first.refresh_token, None)
+                .await
+                .is_none()
+        );
+
+        let active = m.get_user_sessions("u1").await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].token, third.refresh_token);
+
+        assert!(m.revoke_session(&active[0].id).await);
+        assert!(m.get_user_sessions("u1").await.is_empty());
+
+        let another = m.create_session("u2", None).await;
+        let u2_sessions = m.get_user_sessions("u2").await;
+        assert_eq!(m.revoke_family(&u2_sessions[0].family_id).await, 1);
+        assert!(
+            m.refresh_session(&another.refresh_token, None)
+                .await
+                .is_none()
+        );
+        assert!(m.cleanup() >= 2);
     }
 }

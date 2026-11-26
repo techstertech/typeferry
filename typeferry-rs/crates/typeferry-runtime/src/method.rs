@@ -88,16 +88,28 @@ impl Method {
 
         // Authenticated calls must repeat handler authorization and never share
         // results with anonymous callers, including after connection transitions.
+        let is_server = *node
+            .is_server
+            .read()
+            .expect("ClientNode.is_server poisoned");
         if !node.is_authenticated()
+            && !is_server
             && let Some(cache) = &self.cache
         {
             let key = stable_stringify::stringify_noncanonical(&clean);
             if let Some(hit) = cache_get(cache, &key) {
                 return Ok(hit);
             }
-            // Cache miss — fall through to execute and remember.
-            let result = run_with_context(self, clean.clone(), node).await?;
-            cache_put(cache, key, result.clone());
+            // Cache miss — fall through to execute and remember only if still anonymous.
+            let result = run_with_context(self, clean.clone(), node.clone()).await?;
+            let still_anon = !node.is_authenticated()
+                && !*node
+                    .is_server
+                    .read()
+                    .expect("ClientNode.is_server poisoned");
+            if still_anon {
+                cache_put(cache, key, result.clone());
+            }
             return Ok(result);
         }
 
@@ -131,7 +143,20 @@ fn cache_get(cache: &MethodCache, key: &str) -> Option<Value> {
     }
 }
 
+const MAX_CACHE_ENTRIES: usize = 1000;
+
 fn cache_put(cache: &MethodCache, key: String, value: Value) {
     let mut entries = cache.entries.write().expect("cache poisoned");
+    if entries.len() >= MAX_CACHE_ENTRIES && !entries.contains_key(&key) {
+        entries.retain(|_, (_, ts)| ts.elapsed() < cache.max_age);
+        if entries.len() >= MAX_CACHE_ENTRIES
+            && let Some(oldest_key) = entries
+                .iter()
+                .min_by_key(|(_, (_, ts))| *ts)
+                .map(|(k, _)| k.clone())
+        {
+            entries.remove(&oldest_key);
+        }
+    }
     entries.insert(key, (value, Instant::now()));
 }

@@ -120,7 +120,7 @@ pub mod errors {
 }
 
 pub fn room_name(channel: &str, event: &str) -> String {
-    format!("typeferry:{channel}:{event}")
+    format!("typeferry:{}:{channel}:{event}", channel.len())
 }
 
 #[cfg(test)]
@@ -162,7 +162,7 @@ mod tests {
     fn room_name_matches_format() {
         assert_eq!(
             room_name("user:42", "notification"),
-            "typeferry:user:42:notification"
+            "typeferry:7:user:42:notification"
         );
     }
 

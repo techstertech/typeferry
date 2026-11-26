@@ -5,7 +5,7 @@
 use axum::{
     Router,
     body::Bytes,
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -13,9 +13,10 @@ use axum::{
 };
 use serde_json::{Map, Value};
 use std::sync::Arc;
+use std::time::Duration;
 use typeferry_ejson::{EjsonValue, Presentation};
 use typeferry_protocol::{
-    CLIENT_ID_HEADER_KEY, HTTP_ENDPOINT_PATH, TOKEN_HEADER_KEY,
+    AUTH_TIMEOUT_MS, CLIENT_ID_HEADER_KEY, HTTP_ENDPOINT_PATH, MAX_UUID_LENGTH, TOKEN_HEADER_KEY,
     errors::{INTERNAL_ERROR, INVALID_REQUEST, METHOD_FORBIDDEN, METHOD_NOT_FOUND},
 };
 use typeferry_runtime::{ClientNode, Server, TypeFerryError};
@@ -35,6 +36,8 @@ pub fn router(server: Arc<Server>) -> Router {
  * Build the RPC router with origin admission before request-body extraction.
  * Only this router's protocol endpoint receives the configured policy.
  */
+const DEFAULT_HTTP_BODY_LIMIT: usize = 4 * 1024 * 1024;
+
 pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router {
     let mut endpoint = post(handle_rpc);
 
@@ -44,6 +47,7 @@ pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router 
 
     Router::new()
         .route(HTTP_ENDPOINT_PATH, endpoint)
+        .layer(DefaultBodyLimit::max(DEFAULT_HTTP_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(options, admit_origin))
         .with_state(server)
 }
@@ -53,7 +57,11 @@ async fn admit_origin(
     request: Request,
     next: Next,
 ) -> Response {
-    let origin = request.headers().get(header::ORIGIN).cloned();
+    let mut origin_iter = request.headers().get_all(header::ORIGIN).iter();
+    let origin = origin_iter.next().cloned();
+    if origin_iter.next().is_some() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let admitted = match origin.as_ref() {
         Some(origin) => origin
             .to_str()
@@ -137,6 +145,10 @@ async fn handle_rpc(
         .get(CLIENT_ID_HEADER_KEY)
         .and_then(|v| v.to_str().ok())
         && !client_uuid.is_empty()
+        && client_uuid.len() <= MAX_UUID_LENGTH
+        && client_uuid
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
         node.set_id(client_uuid);
     }
@@ -145,7 +157,7 @@ async fn handle_rpc(
         .get(TOKEN_HEADER_KEY)
         .and_then(|v| v.to_str().ok())
         .filter(|s| !s.is_empty() && *s != "undefined")
-        .map(|s| s.trim_start_matches("Bearer ").to_string());
+        .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).to_string());
 
     // Assemble the auth context JSON (context + token).
     let mut ctx_json = typeferry_value_to_json(&context_value);
@@ -156,9 +168,13 @@ async fn handle_rpc(
         obj.insert("token".into(), Value::String(token));
     }
 
-    // Run the auth callback (if configured). Truthy result flips
-    // `authenticated` and becomes the node context — matches TS/Python.
-    let auth_result = server.run_auth(node.clone(), ctx_json).await;
+    // Run the auth callback with timeout (5s); timeout fails closed as Null.
+    let auth_result = tokio::time::timeout(
+        Duration::from_millis(AUTH_TIMEOUT_MS),
+        server.run_auth(node.clone(), ctx_json),
+    )
+    .await
+    .unwrap_or(Value::Null);
     node.set_authenticated(!auth_result.is_null());
     node.set_context(auth_result);
 
