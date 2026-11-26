@@ -10,7 +10,10 @@ import (
 	"github.com/leonardoventurini/typeferry/typeferry-go/ejson"
 )
 
-const maxMetaBytes = 10000
+const (
+	maxMetaBytes = 10000
+	maxMetaDepth = 128
+)
 
 func parseMeta(raw string) ejson.Value {
 	if raw == "" || len(raw) > maxMetaBytes {
@@ -19,7 +22,7 @@ func parseMeta(raw string) ejson.Value {
 
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.UseNumber()
-	value, err := readMetaValue(decoder)
+	value, err := readMetaValue(decoder, 0)
 	if err != nil || value.Kind() != ejson.KindObject {
 		return ejson.Object()
 	}
@@ -31,7 +34,7 @@ func parseMeta(raw string) ejson.Value {
 
 // Metadata is JSON, not EJSON. Read ordered fields directly so tag-shaped
 // objects remain literal and duplicate keys retain their first insertion slot.
-func readMetaValue(decoder *json.Decoder) (ejson.Value, error) {
+func readMetaValue(decoder *json.Decoder, depth int) (ejson.Value, error) {
 	token, err := decoder.Token()
 	if err != nil {
 		return ejson.Value{}, err
@@ -53,10 +56,13 @@ func readMetaValue(decoder *json.Decoder) (ejson.Value, error) {
 		}
 		return ejson.Float(number), nil
 	case json.Delim:
+		if depth >= maxMetaDepth {
+			return ejson.Value{}, errors.New("metadata nesting depth exceeds maximum")
+		}
 		if value == '[' {
 			var items []ejson.Value
 			for decoder.More() {
-				item, err := readMetaValue(decoder)
+				item, err := readMetaValue(decoder, depth+1)
 				if err != nil {
 					return ejson.Value{}, err
 				}
@@ -77,7 +83,7 @@ func readMetaValue(decoder *json.Decoder) (ejson.Value, error) {
 				if !ok {
 					return ejson.Value{}, errors.New("metadata key must be a string")
 				}
-				item, err := readMetaValue(decoder)
+				item, err := readMetaValue(decoder, depth+1)
 				if err != nil {
 					return ejson.Value{}, err
 				}

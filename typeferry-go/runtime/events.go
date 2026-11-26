@@ -95,6 +95,36 @@ func (server *Server) SetChannelAuthorization(check func(*Client, string) bool) 
 	server.channelAuthorization = check
 }
 
+// AddWebSocketClient registers a WebSocket handshake client without displacing an
+// already active client sharing the requested UUID; on collision it assigns a
+// fresh CSPRNG ID to the incoming client instead.
+func (server *Server) AddWebSocketClient(client *Client) {
+	server.presenceMu.Lock()
+	server.mu.Lock()
+	if server.closed {
+		server.mu.Unlock()
+		server.presenceMu.Unlock()
+		if socket := client.Socket(); socket != nil {
+			_ = socket.Close()
+		}
+		return
+	}
+	for {
+		existing := server.clients[client.ID()]
+		if existing == nil || existing == client {
+			break
+		}
+		client.setID(newID())
+	}
+	server.clients[client.ID()] = client
+	tracker := server.presenceTracker
+	server.mu.Unlock()
+	if tracker != nil {
+		tracker.RegisterClient(client)
+	}
+	server.presenceMu.Unlock()
+}
+
 // AddClient atomically replaces a live client with the same UUID. The old
 // socket closes after releasing the server lock, so stale close callbacks
 // cannot remove the replacement.
@@ -255,8 +285,14 @@ func (server *Server) leaveAllLocked(client *Client) {
 	}
 }
 
+const (
+	maxEventsPerSubscriptionCall = 256
+	maxChannelNameBytes          = 256
+	maxRoomsPerClient            = 1024
+)
+
 func roomName(channel, eventName string) string {
-	return "typeferry:" + channel + ":" + eventName
+	return fmt.Sprintf("typeferry:%d:%s:%s", len(channel), channel, eventName)
 }
 
 func eventNames(params ejson.Value) []string {
@@ -264,8 +300,12 @@ func eventNames(params ejson.Value) []string {
 	if !ok || value.Kind() != ejson.KindArray {
 		return nil
 	}
+	items := value.Items()
+	if len(items) > maxEventsPerSubscriptionCall {
+		return nil
+	}
 	var result []string
-	for _, item := range value.Items() {
+	for _, item := range items {
 		if name, ok := item.Text(); ok {
 			result = append(result, name)
 		}
@@ -273,21 +313,30 @@ func eventNames(params ejson.Value) []string {
 	return result
 }
 
-func eventChannel(params ejson.Value) string {
+func eventChannel(params ejson.Value) (string, bool) {
 	value, ok := params.Lookup("channel")
 	if !ok {
-		return protocol.NoChannel
+		return protocol.NoChannel, true
 	}
 	name, ok := value.Text()
 	if !ok || name == "" {
-		return protocol.NoChannel
+		return protocol.NoChannel, true
 	}
-	return name
+	if len(name) > maxChannelNameBytes {
+		return "", false
+	}
+	return name, true
 }
 
 func (server *Server) subscriptionResult(client *Client, params ejson.Value, subscribe bool) ejson.Value {
-	channel := eventChannel(params)
+	channel, channelOK := eventChannel(params)
+	if !channelOK {
+		return ejson.Object()
+	}
 	names := eventNames(params)
+	if len(names) == 0 {
+		return ejson.Object()
+	}
 	fields := make([]ejson.Field, 0, len(names))
 	for _, name := range names {
 		server.mu.RLock()
@@ -316,7 +365,19 @@ func (server *Server) subscriptionResult(client *Client, params ejson.Value, sub
 				allowed = false
 			}
 			if subscribe && allowed {
-				server.joinLocked(client, roomName(channel, name))
+				// Recheck auth and room cap under lock in case logout/revocation ran concurrently.
+				if (entry.options.Protected || entry.options.User) && !client.Authenticated() {
+					allowed = false
+				} else if entry.options.User && entry.options.ShouldSubscribe == nil && channel != client.UserID() {
+					allowed = false
+				} else {
+					room := roomName(channel, name)
+					if _, alreadyIn := server.clientRooms[client][room]; !alreadyIn && len(server.clientRooms[client]) >= maxRoomsPerClient {
+						allowed = false
+					} else {
+						server.joinLocked(client, room)
+					}
+				}
 			}
 			if !subscribe {
 				server.leaveLocked(client, roomName(channel, name))
@@ -336,6 +397,9 @@ func (server *Server) installDefaultMethods() {
 		return server.subscriptionResult(client, params, false), nil
 	}, MethodOptions{})
 	_ = server.AddMethod(protocol.MethodLogout, func(_ context.Context, client *Client, _ ejson.Value) (ejson.Value, error) {
+		server.mu.Lock()
+		server.leaveAllLocked(client)
+		server.mu.Unlock()
 		client.SetAuthenticated(false)
 		client.SetContext(ejson.Null())
 		server.RefreshClientPresence(client)

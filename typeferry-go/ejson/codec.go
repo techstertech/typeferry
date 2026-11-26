@@ -16,7 +16,10 @@ import (
 	"unicode/utf16"
 )
 
-const validRegexFlags = "gimuy"
+const (
+	validRegexFlags = "gimuy"
+	maxEJSONDepth   = 128
+)
 
 type TypeFactory func(Value) (Value, error)
 
@@ -49,7 +52,7 @@ func (codec *Codec) RegisterType(name string, factory TypeFactory) error {
 func (codec *Codec) Parse(source string) (Value, error) {
 	decoder := json.NewDecoder(strings.NewReader(source))
 	decoder.UseNumber()
-	value, err := codec.readValue(decoder)
+	value, err := codec.readValue(decoder, 0)
 	if err != nil {
 		return Value{}, err
 	}
@@ -59,10 +62,10 @@ func (codec *Codec) Parse(source string) (Value, error) {
 		}
 		return Value{}, err
 	}
-	return codec.decodeValue(value)
+	return codec.decodeValue(value, 0)
 }
 
-func (codec *Codec) readValue(decoder *json.Decoder) (Value, error) {
+func (codec *Codec) readValue(decoder *json.Decoder, depth int) (Value, error) {
 	token, err := decoder.Token()
 	if err != nil {
 		return Value{}, err
@@ -90,20 +93,24 @@ func (codec *Codec) readValue(decoder *json.Decoder) (Value, error) {
 		value.numberText = string(item)
 		return value, nil
 	case json.Delim:
+		if depth >= maxEJSONDepth {
+			return Value{}, errors.New("EJSON nesting depth exceeds maximum")
+		}
 		switch item {
 		case '[':
 			var items []Value
 			for decoder.More() {
-				value, err := codec.readValue(decoder)
+				value, err := codec.readValue(decoder, depth+1)
 				if err != nil {
 					return Value{}, err
 				}
 				items = append(items, value)
 			}
 			_, err := decoder.Token()
-			return Array(items...), err
+			return Value{kind: KindArray, items: items}, err
 		case '{':
 			var fields []Field
+			positions := make(map[string]int)
 			for decoder.More() {
 				keyToken, err := decoder.Token()
 				if err != nil {
@@ -113,46 +120,46 @@ func (codec *Codec) readValue(decoder *json.Decoder) (Value, error) {
 				if !ok {
 					return Value{}, errors.New("EJSON object key must be a string")
 				}
-				value, err := codec.readValue(decoder)
+				value, err := codec.readValue(decoder, depth+1)
 				if err != nil {
 					return Value{}, err
 				}
 				// JSON.parse keeps the first insertion position on duplicate keys.
-				position := -1
-				for index := range fields {
-					if fields[index].Key == key {
-						position = index
-						break
-					}
-				}
-				if position < 0 {
-					fields = append(fields, Field{key, value})
-				} else {
+				if position, found := positions[key]; found {
 					fields[position].Value = value
+				} else {
+					positions[key] = len(fields)
+					fields = append(fields, Field{key, value})
 				}
 			}
 			if _, err := decoder.Token(); err != nil {
 				return Value{}, err
 			}
-			return Object(fields...), nil
+			return Value{kind: KindObject, fields: fields}, nil
 		}
 	}
 	return Value{}, fmt.Errorf("unsupported EJSON token %v", token)
 }
 
-func (codec *Codec) decodeValue(value Value) (Value, error) {
+func (codec *Codec) decodeValue(value Value, depth int) (Value, error) {
 	switch value.kind {
 	case KindArray:
+		if depth >= maxEJSONDepth {
+			return Value{}, errors.New("EJSON nesting depth exceeds maximum")
+		}
 		items := make([]Value, 0, len(value.items))
 		for _, item := range value.items {
-			decoded, err := codec.decodeValue(item)
+			decoded, err := codec.decodeValue(item, depth+1)
 			if err != nil {
 				return Value{}, err
 			}
 			items = append(items, decoded)
 		}
-		return Array(items...), nil
+		return Value{kind: KindArray, items: items}, nil
 	case KindObject:
+		if depth >= maxEJSONDepth {
+			return Value{}, errors.New("EJSON nesting depth exceeds maximum")
+		}
 		if hasKeys(value.fields, "$escape") {
 			inner := value.fields[0].Value
 			if inner.kind != KindObject {
@@ -160,17 +167,17 @@ func (codec *Codec) decodeValue(value Value) (Value, error) {
 			}
 			fields := make([]Field, 0, len(inner.fields))
 			for _, field := range inner.fields {
-				decoded, err := codec.decodeValue(field.Value)
+				decoded, err := codec.decodeValue(field.Value, depth+1)
 				if err != nil {
 					return Value{}, err
 				}
 				fields = append(fields, Field{Key: field.Key, Value: decoded})
 			}
-			return Object(fields...), nil
+			return Value{kind: KindObject, fields: fields}, nil
 		}
 		fields := make([]Field, 0, len(value.fields))
 		for _, field := range value.fields {
-			decoded, err := codec.decodeValue(field.Value)
+			decoded, err := codec.decodeValue(field.Value, depth+1)
 			if err != nil {
 				return Value{}, err
 			}
@@ -183,7 +190,7 @@ func (codec *Codec) decodeValue(value Value) (Value, error) {
 }
 
 func (codec *Codec) decodeObject(fields []Field) (Value, error) {
-	object := Object(fields...)
+	object := Value{kind: KindObject, fields: fields}
 	if !tagShape(fields) {
 		return object, nil
 	}
@@ -294,13 +301,13 @@ func sanitizeFlags(source string) string {
 // order. Both modes emit JavaScript array-index keys numerically first.
 func (codec *Codec) Stringify(value Value, canonical bool) (string, error) {
 	var output bytes.Buffer
-	if err := writeValue(&output, value, canonical, false); err != nil {
+	if err := writeValue(&output, value, canonical, false, 0); err != nil {
 		return "", err
 	}
 	return output.String(), nil
 }
 
-func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) error {
+func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool, depth int) error {
 	switch value.kind {
 	case KindNull:
 		output.WriteString("null")
@@ -311,11 +318,11 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 	case KindFloat:
 		switch {
 		case math.IsNaN(value.float):
-			return writeTag(output, canonical, Field{Key: "$InfNaN", Value: Int(0)})
+			return writeTag(output, canonical, depth, Field{Key: "$InfNaN", Value: Int(0)})
 		case math.IsInf(value.float, 1):
-			return writeTag(output, canonical, Field{Key: "$InfNaN", Value: Int(1)})
+			return writeTag(output, canonical, depth, Field{Key: "$InfNaN", Value: Int(1)})
 		case math.IsInf(value.float, -1):
-			return writeTag(output, canonical, Field{Key: "$InfNaN", Value: Int(-1)})
+			return writeTag(output, canonical, depth, Field{Key: "$InfNaN", Value: Int(-1)})
 		default:
 			encoded, err := json.Marshal(value.float)
 			if err != nil {
@@ -326,12 +333,15 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 	case KindString:
 		return writeString(output, value.text)
 	case KindArray:
+		if depth >= maxEJSONDepth {
+			return errors.New("EJSON nesting depth exceeds maximum")
+		}
 		output.WriteByte('[')
 		for index, item := range value.items {
 			if index > 0 {
 				output.WriteByte(',')
 			}
-			if err := writeValue(output, item, canonical, false); err != nil {
+			if err := writeValue(output, item, canonical, false, depth+1); err != nil {
 				return err
 			}
 		}
@@ -339,11 +349,14 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 	case KindObject:
 		if tagShape(value.fields) && !escaped {
 			output.WriteString(`{"$escape":`)
-			if err := writeValue(output, value, canonical, true); err != nil {
+			if err := writeValue(output, value, canonical, true, depth); err != nil {
 				return err
 			}
 			output.WriteByte('}')
 			return nil
+		}
+		if depth >= maxEJSONDepth {
+			return errors.New("EJSON nesting depth exceeds maximum")
 		}
 		fields := orderedFields(value.fields, canonical)
 		output.WriteByte('{')
@@ -355,25 +368,25 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 				return err
 			}
 			output.WriteByte(':')
-			if err := writeValue(output, field.Value, canonical, false); err != nil {
+			if err := writeValue(output, field.Value, canonical, false, depth+1); err != nil {
 				return err
 			}
 		}
 		output.WriteByte('}')
 	case KindDate:
-		return writeTag(output, canonical, Field{Key: "$date", Value: Int(value.int)})
+		return writeTag(output, canonical, depth, Field{Key: "$date", Value: Int(value.int)})
 	case KindBinary:
-		return writeTag(output, canonical,
+		return writeTag(output, canonical, depth,
 			Field{Key: "$binary", Value: String(base64.StdEncoding.EncodeToString(value.bytes))})
 	case KindRegex:
-		return writeTag(output, canonical,
+		return writeTag(output, canonical, depth,
 			Field{Key: "$regexp", Value: String(value.text)},
 			Field{Key: "$flags", Value: String(value.flags)})
 	case KindCustom:
 		if value.inner == nil {
 			return errors.New("custom EJSON value has no inner value")
 		}
-		return writeTag(output, canonical,
+		return writeTag(output, canonical, depth,
 			Field{Key: "$type", Value: String(value.text)},
 			Field{Key: "$value", Value: *value.inner})
 	default:
@@ -382,8 +395,8 @@ func writeValue(output *bytes.Buffer, value Value, canonical, escaped bool) erro
 	return nil
 }
 
-func writeTag(output *bytes.Buffer, canonical bool, fields ...Field) error {
-	return writeValue(output, Object(fields...), canonical, true)
+func writeTag(output *bytes.Buffer, canonical bool, depth int, fields ...Field) error {
+	return writeValue(output, Value{kind: KindObject, fields: fields}, canonical, true, depth)
 }
 
 func writeString(output *bytes.Buffer, value string) error {

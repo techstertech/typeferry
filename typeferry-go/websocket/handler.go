@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,17 +14,25 @@ import (
 	"github.com/leonardoventurini/typeferry/typeferry-go/runtime"
 )
 
-const PingInterval = 25 * time.Second
+const (
+	PingInterval       = 25 * time.Second
+	defaultWSRateMax   = 120
+	defaultWSRateWin   = time.Minute
+	maxConcurrentRPCs  = 64
+	outboundQueueSize  = 256
+	socketWriteTimeout = 5 * time.Second
+)
 
 type Options struct {
 	// Origins is unrestricted when nil; a non-nil empty slice denies named origins.
 	Origins []string
 	// AllowOriginless admits missing Origin headers only for this WebSocket handler.
-	AllowOriginless bool
-	Authenticate    HandshakeAuthenticator
-	MaxMessageBytes int64
-	RateLimitMax    int
-	RateLimitWindow time.Duration
+	AllowOriginless  bool
+	Authenticate     HandshakeAuthenticator
+	MaxMessageBytes  int64
+	DisableRateLimit bool
+	RateLimitMax     int
+	RateLimitWindow  time.Duration
 }
 
 type Handler struct {
@@ -59,8 +68,16 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		http.Error(response, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	origin := request.Header.Get("Origin")
-	_, originPresent := request.Header["Origin"]
+	originValues := request.Header.Values("Origin")
+	if len(originValues) > 1 {
+		http.Error(response, "Forbidden", http.StatusForbidden)
+		return
+	}
+	originPresent := len(originValues) == 1
+	origin := ""
+	if originPresent {
+		origin = originValues[0]
+	}
 	if handler.origins != nil {
 		_, allowed := handler.origins[origin]
 		if !originPresent {
@@ -93,7 +110,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	connection.SetReadLimit(limit)
 	ctx, cancel := context.WithCancel(request.Context())
-	socket := &connectionSocket{connection: connection, cancel: cancel}
+	socket := newConnectionSocket(ctx, connection, cancel)
 	handler.mu.Lock()
 	if handler.closed {
 		handler.mu.Unlock()
@@ -116,16 +133,25 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	headers := make(map[string]string)
 	for name, values := range request.Header {
 		if len(values) > 0 {
-			headers[strings.ToLower(name)] = values[0]
+			lower := strings.ToLower(name)
+			if lower == "cookie" {
+				headers[lower] = strings.Join(values, "; ")
+			} else {
+				headers[lower] = values[0]
+			}
 		}
 	}
 	dispatcher := NewDispatcher(handler.server, socket, query, handler.options.Authenticate)
-	if handler.options.RateLimitMax > 0 {
+	if !handler.options.DisableRateLimit {
+		rateMax := handler.options.RateLimitMax
+		if rateMax <= 0 {
+			rateMax = defaultWSRateMax
+		}
 		window := handler.options.RateLimitWindow
 		if window <= 0 {
-			window = time.Minute
+			window = defaultWSRateWin
 		}
-		dispatcher.SetRateLimit(handler.options.RateLimitMax, window)
+		dispatcher.SetRateLimit(rateMax, window)
 	}
 	dispatcher.SetHandshake(Handshake{Path: request.URL.Path, Headers: headers, Query: query})
 	dispatcher.Client().SetRequestMetadata(headers, request.RemoteAddr, request.UserAgent())
@@ -149,6 +175,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		}
 	}()
 	var calls sync.WaitGroup
+	rpcSlots := make(chan struct{}, maxConcurrentRPCs)
 	var pingDone chan struct{}
 	defer func() {
 		_ = socket.Close()
@@ -174,11 +201,23 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 				return
 			}
 			if work := dispatcher.prepare(ctx, text); work != nil {
-				if ctx.Err() != nil {
+				select {
+				case rpcSlots <- struct{}{}:
+					if ctx.Err() != nil {
+						<-rpcSlots
+						return
+					}
+					calls.Add(1)
+					go func() {
+						defer func() {
+							<-rpcSlots
+							calls.Done()
+						}()
+						work()
+					}()
+				case <-ctx.Done():
 					return
 				}
-				calls.Add(1)
-				go func() { defer calls.Done(); work() }()
 			}
 		case <-ctx.Done():
 			return
@@ -232,19 +271,71 @@ func (handler *Handler) Close() error {
 
 type connectionSocket struct {
 	connection *websocket.Conn
+	outbound   chan string
+	closed     chan struct{}
+	writerDone chan struct{}
 	once       sync.Once
 	cancel     context.CancelFunc
 	closeErr   error
 }
 
+func newConnectionSocket(ctx context.Context, connection *websocket.Conn, cancel context.CancelFunc) *connectionSocket {
+	socket := &connectionSocket{
+		connection: connection,
+		outbound:   make(chan string, outboundQueueSize),
+		closed:     make(chan struct{}),
+		writerDone: make(chan struct{}),
+		cancel:     cancel,
+	}
+	go socket.writeLoop(ctx)
+	return socket
+}
+
+func (socket *connectionSocket) writeLoop(ctx context.Context) {
+	defer close(socket.writerDone)
+	for {
+		select {
+		case <-socket.closed:
+			return
+		case message := <-socket.outbound:
+			writeCtx, cancel := context.WithTimeout(ctx, socketWriteTimeout)
+			err := socket.connection.Write(writeCtx, websocket.MessageText, []byte(message))
+			cancel()
+			if err != nil {
+				_ = socket.Close()
+				return
+			}
+		}
+	}
+}
+
 func (socket *connectionSocket) SendText(ctx context.Context, message string) error {
-	return socket.connection.Write(ctx, websocket.MessageText, []byte(message))
+	select {
+	case <-socket.closed:
+		return net.ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case <-socket.closed:
+		return net.ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case socket.outbound <- message:
+		return nil
+	default:
+		_ = socket.Close()
+		return errors.New("websocket outbound queue full")
+	}
 }
 
 func (socket *connectionSocket) Close() error {
 	socket.once.Do(func() {
+		close(socket.closed)
 		socket.cancel()
 		socket.closeErr = socket.connection.CloseNow()
 	})
+	<-socket.writerDone
 	return socket.closeErr
 }

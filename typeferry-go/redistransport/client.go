@@ -15,14 +15,16 @@ import (
 // Client owns dedicated Redis publish and subscribe connections. Subscribe
 // readiness is checked before Connect returns so the first event is not lost.
 type Client struct {
-	adapter *Adapter
-	server  *runtime.Server
-	pub     *redis.Client
-	sub     *redis.PubSub
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mu      sync.Mutex
-	closed  bool
+	adapter        *Adapter
+	server         *runtime.Server
+	pub            *redis.Client
+	sub            *redis.PubSub
+	cancel         context.CancelFunc
+	done           chan struct{}
+	presenceNotify chan struct{}
+	presenceDone   chan struct{}
+	mu             sync.Mutex
+	closed         bool
 }
 
 func Connect(ctx context.Context, server *runtime.Server, options *redis.Options) (*Client, error) {
@@ -41,7 +43,14 @@ func Connect(ctx context.Context, server *runtime.Server, options *redis.Options
 		return nil, err
 	}
 	listenCtx, cancel := context.WithCancel(context.Background())
-	client := &Client{pub: pub, sub: sub, cancel: cancel, done: make(chan struct{})}
+	client := &Client{
+		pub:            pub,
+		sub:            sub,
+		cancel:         cancel,
+		done:           make(chan struct{}),
+		presenceNotify: make(chan struct{}, 1),
+		presenceDone:   make(chan struct{}),
+	}
 	client.server = server
 	client.adapter = New(server, client)
 	if err := pub.SAdd(ctx, "typeferry:servers", server.ID()).Err(); err != nil {
@@ -53,6 +62,7 @@ func Connect(ctx context.Context, server *runtime.Server, options *redis.Options
 	}
 	server.SetPresenceTracker(client)
 	go client.listen(listenCtx)
+	go client.presenceLoop(listenCtx)
 	return client, nil
 }
 
@@ -94,6 +104,7 @@ func (client *Client) Close() error {
 	client.server.SetPresenceTracker(nil)
 	first := client.sub.Close()
 	<-client.done
+	<-client.presenceDone
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cleanup := client.pub.Del(ctx, client.clientsKey(), client.usersKey()).Err()
@@ -104,34 +115,42 @@ func (client *Client) Close() error {
 func (client *Client) clientsKey() string { return "typeferry:clients:" + client.server.ID() }
 func (client *Client) usersKey() string   { return "typeferry:users:" + client.server.ID() }
 
-func (client *Client) RegisterClient(node *runtime.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = client.pub.SAdd(ctx, client.clientsKey(), node.ID()).Err()
-	client.refreshUsers(ctx)
+func (client *Client) triggerPresenceSync() {
+	select {
+	case client.presenceNotify <- struct{}{}:
+	default:
+	}
 }
 
-func (client *Client) RemoveClient(node *runtime.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = client.pub.SRem(ctx, client.clientsKey(), node.ID()).Err()
-	client.refreshUsers(ctx)
+func (client *Client) RegisterClient(_ *runtime.Client) { client.triggerPresenceSync() }
+func (client *Client) RemoveClient(_ *runtime.Client)   { client.triggerPresenceSync() }
+func (client *Client) RefreshClient(_ *runtime.Client)  { client.triggerPresenceSync() }
+
+func (client *Client) presenceLoop(ctx context.Context) {
+	defer close(client.presenceDone)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-client.presenceNotify:
+			syncCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			client.syncPresenceSnapshot(syncCtx)
+			cancel()
+		}
+	}
 }
 
-func (client *Client) RefreshClient(_ *runtime.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	client.refreshUsers(ctx)
-}
-
-func (client *Client) refreshUsers(ctx context.Context) {
+func (client *Client) syncPresenceSnapshot(ctx context.Context) {
+	snapshot := client.server.ClientSnapshot()
 	users := make(map[string]struct{})
-	for _, node := range client.server.ClientSnapshot() {
+	pipe := client.pub.TxPipeline()
+	pipe.Del(ctx, client.clientsKey())
+	for _, node := range snapshot {
+		pipe.SAdd(ctx, client.clientsKey(), node.ID())
 		if id := node.UserID(); id != "" {
 			users[id] = struct{}{}
 		}
 	}
-	pipe := client.pub.TxPipeline()
 	pipe.Del(ctx, client.usersKey())
 	for id := range users {
 		pipe.SAdd(ctx, client.usersKey(), id)

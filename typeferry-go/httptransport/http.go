@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +22,10 @@ const (
 	defaultBodyLimit  = 4 * 1024 * 1024
 	defaultRateMax    = 120
 	defaultRateWindow = time.Minute
+	maxLimiterEntries = 100_000
 )
+
+var validClientID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
 
 type Options struct {
 	// Origins is unrestricted when nil; a non-nil empty slice denies named origins.
@@ -36,21 +40,49 @@ type Options struct {
 }
 
 type limiter struct {
-	mu      sync.Mutex
-	entries map[string][]time.Time
-	max     int
-	window  time.Duration
+	mu        sync.Mutex
+	entries   map[string][]time.Time
+	max       int
+	window    time.Duration
+	lastSweep time.Time
+}
+
+func (limit *limiter) sweepLocked(now time.Time) {
+	for entryKey, instants := range limit.entries {
+		kept := instants[:0]
+		for _, instant := range instants {
+			if now.Sub(instant) < limit.window {
+				kept = append(kept, instant)
+			}
+		}
+		if len(kept) == 0 {
+			delete(limit.entries, entryKey)
+		} else {
+			limit.entries[entryKey] = kept
+		}
+	}
+	limit.lastSweep = now
 }
 
 func (limit *limiter) consume(key string) (bool, int, time.Duration) {
 	limit.mu.Lock()
 	defer limit.mu.Unlock()
 	now := time.Now()
+	if limit.lastSweep.IsZero() || now.Sub(limit.lastSweep) >= limit.window || len(limit.entries) >= maxLimiterEntries {
+		limit.sweepLocked(now)
+	}
 	old := limit.entries[key]
 	kept := old[:0]
 	for _, instant := range old {
 		if now.Sub(instant) < limit.window {
 			kept = append(kept, instant)
+		}
+	}
+	if _, exists := limit.entries[key]; !exists && len(limit.entries) >= maxLimiterEntries {
+		// Evict one entry when saturated so distinct-IP floods remain bounded.
+		for k := range limit.entries {
+			delete(limit.entries, k)
+			break
 		}
 	}
 	if len(kept) >= limit.max {
@@ -104,8 +136,17 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		response.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	_, originPresent := request.Header["Origin"]
-	if !handler.originAllowed(request.Header.Get("Origin"), originPresent) {
+	originValues := request.Header.Values("Origin")
+	if len(originValues) > 1 {
+		response.WriteHeader(http.StatusForbidden)
+		return
+	}
+	originPresent := len(originValues) == 1
+	origin := ""
+	if originPresent {
+		origin = originValues[0]
+	}
+	if !handler.originAllowed(origin, originPresent) {
 		response.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -128,13 +169,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		response.WriteHeader(http.StatusRequestEntityTooLarge)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(request.Body, handler.options.MaxBodyBytes+1))
+	limitedBody := http.MaxBytesReader(response, request.Body, handler.options.MaxBodyBytes)
+	body, err := io.ReadAll(limitedBody)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			response.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 		response.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if int64(len(body)) > handler.options.MaxBodyBytes {
-		response.WriteHeader(http.StatusRequestEntityTooLarge)
 		return
 	}
 	handler.dispatch(response, request, address, string(body))
@@ -186,11 +229,19 @@ func (handler *Handler) dispatch(response http.ResponseWriter, request *http.Req
 		return
 	}
 
-	client := runtime.NewClient(request.Header.Get("X-Client-Id"))
+	clientID := request.Header.Get("X-Client-Id")
+	if !validClientID.MatchString(clientID) {
+		clientID = ""
+	}
+	client := runtime.NewClient(clientID)
 	headers := make(map[string]string, len(request.Header))
 	for name, values := range request.Header {
 		if len(values) > 0 {
-			headers[name] = values[0]
+			if strings.EqualFold(name, "Cookie") {
+				headers[name] = strings.Join(values, "; ")
+			} else {
+				headers[name] = values[0]
+			}
 		}
 	}
 	client.SetRequestMetadata(headers, address, request.UserAgent())
@@ -202,6 +253,7 @@ func (handler *Handler) dispatch(response http.ResponseWriter, request *http.Req
 		authInput = setField(authInput, "token", ejson.String(strings.TrimPrefix(token, "Bearer ")))
 	}
 	if err := handler.server.Authenticate(request.Context(), client, authInput); err != nil {
+		flushResponseHeaders(response, client)
 		handler.writeError(response, protocol.ErrorInternal, "", "", nil, isVoid)
 		return
 	}
@@ -213,6 +265,7 @@ func (handler *Handler) dispatch(response http.ResponseWriter, request *http.Req
 	uuidValue, _ := payload.Lookup("uuid")
 	uuid, _ := uuidValue.Text()
 	if err != nil {
+		flushResponseHeaders(response, client)
 		message := protocol.ErrorInternal
 		var public runtime.PublicError
 		var validation *runtime.SchemaValidationError
@@ -240,13 +293,18 @@ func (handler *Handler) dispatch(response http.ResponseWriter, request *http.Req
 	fields = append(fields, ejson.Field{Key: "method", Value: ejson.String(methodName)}, ejson.Field{Key: "result", Value: result})
 	encoded, err := codec.Stringify(ejson.Object(fields...), false)
 	if err != nil {
+		flushResponseHeaders(response, client)
 		handler.writeError(response, protocol.ErrorInternal, uuid, "", nil, isVoid)
 		return
 	}
+	flushResponseHeaders(response, client)
+	writeBody(response, encoded)
+}
+
+func flushResponseHeaders(response http.ResponseWriter, client *runtime.Client) {
 	for _, header := range client.ResponseHeaders() {
 		response.Header().Add(header.Name, header.Value)
 	}
-	writeBody(response, encoded)
 }
 
 func (handler *Handler) writeError(response http.ResponseWriter, message, uuid, method string, issues []string, silent bool) {

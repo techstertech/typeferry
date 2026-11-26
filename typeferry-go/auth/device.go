@@ -20,13 +20,11 @@ var (
 func ParseDeviceInfo(headers map[string]string, remoteAddress string) DeviceInfo {
 	info := DeviceInfo{IP: remoteAddress}
 	for name, value := range headers {
-		switch strings.ToLower(name) {
-		case "user-agent":
-			info.UserAgent = value
-		case "x-forwarded-for":
-			if value != "" {
-				info.IP = value
+		if strings.ToLower(name) == "user-agent" {
+			if len(value) > 512 {
+				value = value[:512]
 			}
+			info.UserAgent = value
 		}
 	}
 	if info.UserAgent == "" {

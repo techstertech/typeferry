@@ -83,7 +83,17 @@ func NewClient(id string) *Client {
 	return &Client{id: id, context: ejson.Null(), meta: ejson.Object(), headers: make(map[string]string)}
 }
 
-func (client *Client) ID() string { return client.id }
+func (client *Client) ID() string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	return client.id
+}
+
+func (client *Client) setID(id string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.id = id
+}
 
 func (client *Client) Context() ejson.Value {
 	client.mu.RLock()
@@ -313,7 +323,7 @@ func (server *Server) SetAuth(auth Authenticator, login Handler) error {
 	}
 	server.auth = auth
 	server.mu.Unlock()
-	return server.AddMethod(protocol.MethodLogin, login, MethodOptions{})
+	return server.AddMethod(protocol.MethodLogin, login, MethodOptions{Sensitive: true})
 }
 
 func (server *Server) Authenticate(ctx context.Context, client *Client, input ejson.Value) error {
@@ -424,8 +434,9 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 			return ejson.Null(), err
 		}
 		entry.mu.Lock()
+		now := time.Now()
 		cached, found := entry.cache[key]
-		if found && time.Since(cached.created) < entry.options.MaxAge {
+		if found && now.Sub(cached.created) < entry.options.MaxAge {
 			entry.mu.Unlock()
 			select {
 			case <-cached.ready:
@@ -438,7 +449,27 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 			emit(cached.value)
 			return cached.value, nil
 		}
-		pending = &cacheEntry{created: time.Now(), ready: make(chan struct{})}
+		if len(entry.cache) >= 1000 {
+			for k, item := range entry.cache {
+				if now.Sub(item.created) >= entry.options.MaxAge {
+					delete(entry.cache, k)
+				}
+			}
+			if len(entry.cache) >= 1000 {
+				var oldestKey string
+				var oldestTime time.Time
+				for k, item := range entry.cache {
+					if oldestKey == "" || item.created.Before(oldestTime) {
+						oldestKey = k
+						oldestTime = item.created
+					}
+				}
+				if oldestKey != "" {
+					delete(entry.cache, oldestKey)
+				}
+			}
+		}
+		pending = &cacheEntry{created: now, ready: make(chan struct{})}
 		entry.cache[key] = pending
 		entry.mu.Unlock()
 	}
@@ -448,6 +479,11 @@ func (server *Server) Call(ctx context.Context, name string, params ejson.Value,
 		entry.mu.Lock()
 		pending.value = result
 		pending.err = err
+		if err != nil || client.Authenticated() || ctx.Err() != nil {
+			if entry.cache[key] == pending {
+				delete(entry.cache, key)
+			}
+		}
 		close(pending.ready)
 		entry.mu.Unlock()
 	}

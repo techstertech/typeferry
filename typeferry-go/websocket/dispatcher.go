@@ -103,7 +103,7 @@ func (dispatcher *Dispatcher) Open(ctx context.Context) error {
 		dispatcher.lifecycle.Unlock()
 		return net.ErrClosed
 	}
-	dispatcher.server.AddClient(dispatcher.client)
+	dispatcher.server.AddWebSocketClient(dispatcher.client)
 	if dispatcher.auth == nil && (!dispatcher.server.HasAuth() || dispatcher.query["token"] == "") {
 		dispatcher.lifecycle.Unlock()
 		return dispatcher.send(ctx, ejson.Field{Key: "t", Value: ejson.String(protocol.MessageAuth)}, ejson.Field{Key: "authenticated", Value: ejson.Bool(false)})
@@ -179,6 +179,9 @@ func (dispatcher *Dispatcher) prepare(ctx context.Context, text string) func() {
 	kind, _ := fieldText(frame, "t")
 	switch kind {
 	case protocol.MessagePing:
+		if dispatcher.limit != nil && !dispatcher.limit.take() {
+			return nil
+		}
 		_ = dispatcher.send(ctx, ejson.Field{Key: "t", Value: ejson.String(protocol.MessagePong)})
 	case protocol.MessagePong:
 		dispatcher.pendingPing.Store(false)
@@ -216,8 +219,11 @@ func (dispatcher *Dispatcher) prepare(ctx context.Context, text string) func() {
 				message := protocol.ErrorInternal
 				var public runtime.PublicError
 				var validation *runtime.SchemaValidationError
-				if errors.As(callError, &public) || errors.As(callError, &validation) {
-					message = callError.Error()
+				switch {
+				case errors.As(callError, &validation):
+					message = validation.Error()
+				case errors.As(callError, &public):
+					message = public.Error()
 				}
 				fields = append(fields, ejson.Field{Key: "error", Value: ejson.String(message)})
 				if validation != nil {

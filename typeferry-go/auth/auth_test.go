@@ -99,3 +99,57 @@ func TestSupportedAlgorithmsAndSessionRevocation(t *testing.T) {
 		}
 	}
 }
+
+func TestGraceReuseRejectsSupersededAndExpiredReplacement(t *testing.T) {
+	config := testConfig()
+	now := time.Unix(1_700_000_000, 0)
+	manager, err := NewInMemorySessionManager(config, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := manager.CreateSession("user", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.RefreshSession(first.RefreshToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rotate second -> third while still within first's grace period.
+	now = now.Add(5 * time.Second)
+	if _, err := manager.RefreshSession(second.RefreshToken, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Attempting grace reuse on first after second was already rotated must fail!
+	if _, err := manager.RefreshSession(first.RefreshToken, nil); err == nil {
+		t.Fatal("grace reuse minted token for already-superseded replacement")
+	}
+
+	// Expired replacement inside grace window also fails.
+	shortConfig := testConfig()
+	shortConfig.RefreshTokenExpiry = 5 * time.Second
+	shortConfig.RotationGracePeriod = 15 * time.Second
+	now2 := time.Unix(1_700_000_000, 0)
+	m2, err := NewInMemorySessionManager(shortConfig, func() time.Time { return now2 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := m2.CreateSession("u2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now2 = now2.Add(4 * time.Second)
+	_, err = m2.RefreshSession(s1.RefreshToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Advance past s1/s2 expiry? Wait: make s2 expire earlier manually or keep s1 expiry extended so only replacement expired.
+	m2.mu.Lock()
+	m2.sessions[s1.RefreshToken].Expiration = now2.Add(20 * time.Second)
+	m2.sessions[m2.sessions[s1.RefreshToken].ReplacedBy].Expiration = now2.Add(1 * time.Second)
+	m2.mu.Unlock()
+	now2 = now2.Add(2 * time.Second)
+	if _, err := m2.RefreshSession(s1.RefreshToken, nil); err == nil {
+		t.Fatal("grace reuse accepted expired replacement session")
+	}
+}

@@ -10,8 +10,17 @@ func TestParseDeviceInfo(t *testing.T) {
 	}
 	for _, example := range examples {
 		result := ParseDeviceInfo(map[string]string{"user-agent": example.agent, "x-forwarded-for": "192.0.2.1"}, "198.51.100.2")
-		if result.OS != example.os || result.Browser != example.browser || result.DeviceType != example.kind || result.IP != "192.0.2.1" {
+		if result.OS != example.os || result.Browser != example.browser || result.DeviceType != example.kind || result.IP != "198.51.100.2" {
 			t.Fatalf("device = %#v", result)
 		}
+	}
+
+	hugeUA := make([]byte, 2048)
+	for i := range hugeUA {
+		hugeUA[i] = 'a'
+	}
+	bounded := ParseDeviceInfo(map[string]string{"user-agent": string(hugeUA)}, "198.51.100.2")
+	if len(bounded.UserAgent) > 512 {
+		t.Fatalf("UserAgent length = %d, want <= 512", len(bounded.UserAgent))
 	}
 }

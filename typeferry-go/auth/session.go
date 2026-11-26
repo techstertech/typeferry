@@ -103,10 +103,13 @@ func (manager *InMemorySessionManager) RefreshSession(token string, device *Devi
 			return TokenPair{}, errors.New("refresh token was reused")
 		}
 		replacement := manager.sessions[session.ReplacedBy]
-		if replacement == nil || replacement.Revoked {
+		if replacement == nil || replacement.Revoked || replacement.ReplacedBy != "" || manager.now().After(replacement.Expiration) {
 			return TokenPair{}, errors.New("replacement session is unavailable")
 		}
 		return manager.pairLocked(replacement)
+	}
+	if len(manager.sessions) >= 10000 {
+		manager.pruneExpiredLocked()
 	}
 	pair, err := manager.createLocked(session.UserID, session.FamilyID, device)
 	if err != nil {
@@ -188,6 +191,10 @@ func (manager *InMemorySessionManager) SessionFor(token string) (Session, bool) 
 func (manager *InMemorySessionManager) Cleanup() int {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	return manager.pruneExpiredLocked()
+}
+
+func (manager *InMemorySessionManager) pruneExpiredLocked() int {
 	count := 0
 	for token, session := range manager.sessions {
 		if session.Revoked || !manager.now().Before(session.Expiration) {
