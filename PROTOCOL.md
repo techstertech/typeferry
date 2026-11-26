@@ -697,7 +697,7 @@ For each event name the server:
 3. If the event is protected and the node is unauthenticated → `false`.
 4. Calls `event.shouldSubscribe(node, eventName, channel)`. If false →
    `false`.
-5. Joins the room `typeferry:${channel}:${eventName}` via the
+5. Joins the room `typeferry:${utf8ByteLength(channel)}:${channel}:${eventName}` via the
    `WebSocketTransport.rooms` registry.
 
 Returns a map `Record<string, boolean>` with per-event success.
@@ -708,7 +708,7 @@ Source: `src/server/methods.ts:51-121`.
 
 Params: same shape as `rpc:on`.
 
-For each event, leaves the room `typeferry:${channel}:${eventName}`.
+For each event, leaves the room `typeferry:${utf8ByteLength(channel)}:${channel}:${eventName}`.
 Missing event → `false`; everything else → `true`.
 
 Source: `src/server/methods.ts:17-48`.
