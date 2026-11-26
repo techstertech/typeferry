@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from typeferry.protocol.constants import NO_CHANNEL, Methods, ServerEvents
 from typeferry.server.method import Method, MethodOptions
 from typeferry.server.room_name import get_room_name
+from typeferry.server.socket import SocketState
 
 if TYPE_CHECKING:
     from typeferry.server.client_node import ClientNode
@@ -29,19 +30,31 @@ MAX_CHANNEL_LENGTH = 256
 MAX_ROOMS_PER_CLIENT = 1024
 
 
-async def _rpc_on(server: Server, node: ClientNode | None, params: Any) -> dict[str, bool]:
-    if node is None:
-        return {}
-
-    raw_events = params.get("events") if isinstance(params, dict) else None
+def _validate_subscription_params(params: Any) -> tuple[list[str], str] | None:
+    if not isinstance(params, dict):
+        return None
+    raw_channel = params.get("channel")
+    if raw_channel is not None and (
+        not isinstance(raw_channel, str)
+        or len(raw_channel.encode("utf-8")) > MAX_CHANNEL_LENGTH
+    ):
+        return None
+    channel = raw_channel if isinstance(raw_channel, str) and raw_channel else NO_CHANNEL
+    raw_events = params.get("events")
     if isinstance(raw_events, list) and len(raw_events) > MAX_EVENTS_PER_SUBSCRIPTION_CALL:
+        return None
+    events = [e for e in raw_events if isinstance(e, str)] if isinstance(raw_events, list) else []
+    return events, channel
+
+
+async def _rpc_on(server: Server, node: ClientNode | None, params: Any) -> dict[str, bool]:
+    if node is None or node.socket is None or node.socket.readyState != SocketState.OPEN:
         return {}
 
-    events = _events_list(params)
-    channel = _channel(params)
-    if len(channel) > MAX_CHANNEL_LENGTH:
+    validated = _validate_subscription_params(params)
+    if validated is None:
         return {}
-
+    events, channel = validated
     if not events:
         return {}
 
@@ -49,7 +62,11 @@ async def _rpc_on(server: Server, node: ClientNode | None, params: Any) -> dict[
 
     result: dict[str, bool] = {}
     for event_name in events:
-        if not channel_allowed:
+        if (
+            not channel_allowed
+            or node.socket is None
+            or node.socket.readyState != SocketState.OPEN
+        ):
             result[event_name] = False
             continue
         result[event_name] = await _can_subscribe(server, node, event_name, channel)
@@ -57,15 +74,17 @@ async def _rpc_on(server: Server, node: ClientNode | None, params: Any) -> dict[
 
 
 async def _rpc_off(server: Server, node: ClientNode | None, params: Any) -> dict[str, bool]:
-    if node is None or node.socket is None:
+    if node is None or node.socket is None or node.socket.readyState != SocketState.OPEN:
         return {}
 
     transport = server.websocket_transport
     if transport is None:
         return {}
 
-    events = _events_list(params)
-    channel = _channel(params)
+    validated = _validate_subscription_params(params)
+    if validated is None:
+        return {}
+    events, channel = validated
 
     result: dict[str, bool] = {}
     for event_name in events:
@@ -106,7 +125,7 @@ async def _can_subscribe(
     if event.is_protected and not node.authenticated:
         return False
 
-    if node.socket is None:
+    if node.socket is None or node.socket.readyState != SocketState.OPEN:
         return False
 
     transport = server.websocket_transport
@@ -132,22 +151,6 @@ async def _resolve_channel_permission(
     if _inspect.isawaitable(result):
         result = await result
     return bool(result)
-
-
-def _events_list(params: Any) -> list[str]:
-    if isinstance(params, dict):
-        events = params.get("events")
-        if isinstance(events, list):
-            return [e for e in events if isinstance(e, str)]
-    return []
-
-
-def _channel(params: Any) -> str:
-    if isinstance(params, dict):
-        value = params.get("channel", NO_CHANNEL)
-        if isinstance(value, str) and value:
-            return value
-    return NO_CHANNEL
 
 
 def build_default_methods(server: Server) -> dict[str, Method]:

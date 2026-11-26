@@ -206,6 +206,13 @@ class Server(ServerChannel):
         self.channels[name] = new_channel
         return new_channel
 
+    def lookup_channel(self, name: str = NO_CHANNEL) -> ServerChannel | None:
+        """Return an existing channel without allocating on untrusted keys."""
+
+        if not name or name == NO_CHANNEL:
+            return self
+        return self.channels.get(name)
+
     # ------------------------------------------------------------------
     # Client index
     # ------------------------------------------------------------------
@@ -315,6 +322,33 @@ class Server(ServerChannel):
                 continue
             if inspect.isawaitable(result):
                 _schedule(result)
+
+    async def emit_server_event_async(
+        self,
+        name: str | ServerEvents,
+        payload: Any = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> None:
+        """Emit a server event and await any async listener coroutines."""
+
+        key = name.value if isinstance(name, ServerEvents) else name
+        listeners = self._server_event_listeners.get(key)
+        if not listeners:
+            return
+        for listener in listeners:
+            try:
+                result = listener(payload)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                if raise_on_error:
+                    raise
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "Server event listener for %s failed", key
+                )
 
     # ------------------------------------------------------------------
     # Lifecycle

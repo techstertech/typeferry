@@ -90,16 +90,19 @@ def decode_base64(value: str) -> bytes:
         index += 4
 
     if placeholder_length == 2:
-        chunk = (_read_char(value, index) << 2) | (
-            _read_char(value, index + 1) >> 4
-        )
+        b0 = _read_char(value, index)
+        b1 = _read_char(value, index + 1)
+        if (b1 & 0x0F) != 0:
+            raise ValueError("Invalid base64 padding bits")
+        chunk = (b0 << 2) | (b1 >> 4)
         out[byte_index] = chunk & 0xFF
     elif placeholder_length == 1:
-        chunk = (
-            (_read_char(value, index) << 10)
-            | (_read_char(value, index + 1) << 4)
-            | (_read_char(value, index + 2) >> 2)
-        )
+        b0 = _read_char(value, index)
+        b1 = _read_char(value, index + 1)
+        b2 = _read_char(value, index + 2)
+        if (b2 & 0x03) != 0:
+            raise ValueError("Invalid base64 padding bits")
+        chunk = (b0 << 10) | (b1 << 4) | (b2 >> 2)
         out[byte_index] = (chunk >> 8) & 0xFF
         out[byte_index + 1] = chunk & 0xFF
 

@@ -79,7 +79,7 @@ class StarletteSocket:
         if self.readyState != SocketState.OPEN:
             return
         try:
-            await self._ws.send_text(data)
+            await asyncio.wait_for(self._ws.send_text(data), timeout=5.0)
         except Exception:
             self.readyState = SocketState.CLOSED
 
@@ -227,7 +227,18 @@ class WebSocketTransport:
         limiter: SlidingWindowLimiter | None = None,
     ) -> None:
         while True:
-            raw = await ws.receive_text()
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+            raw_bytes = message.get("bytes")
+            if raw_bytes is not None:
+                if len(raw_bytes) > self.max_message_bytes:
+                    await socket.close(code=1009)
+                    return
+                continue
+            raw = message.get("text")
+            if raw is None:
+                continue
             if len(raw.encode("utf-8")) > self.max_message_bytes:
                 await socket.close(code=1009)
                 return
@@ -246,12 +257,20 @@ class WebSocketTransport:
             if msg_type == "rpc":
                 rpc_id = envelope.get("id")
                 method_name = envelope.get("method")
-                if not isinstance(rpc_id, str) or not rpc_id or not isinstance(method_name, str) or not method_name:
+                if limiter is not None and not limiter.try_consume(node.uuid)[0]:
+                    if isinstance(rpc_id, str) and rpc_id:
+                        await send_response(
+                            node, rpc_id, error=Errors.RATE_LIMIT_EXCEEDED.value
+                        )
+                    continue
+                if (
+                    not isinstance(rpc_id, str)
+                    or not rpc_id
+                    or not isinstance(method_name, str)
+                    or not method_name
+                ):
                     if isinstance(rpc_id, str) and rpc_id:
                         await send_response(node, rpc_id, error=Errors.INVALID_REQUEST.value)
-                    continue
-                if limiter is not None and not limiter.try_consume(node.uuid)[0]:
-                    await send_response(node, rpc_id, error=Errors.RATE_LIMIT_EXCEEDED.value)
                     continue
                 await handle_rpc(
                     self.server,

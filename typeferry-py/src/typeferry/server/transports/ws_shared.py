@@ -232,20 +232,25 @@ async def authenticate_node(
     if node.socket is None or node.socket.readyState != SocketState.OPEN:
         return
 
-    node.authenticated = authentication_succeeded(result)
-    node.set_context(result if node.authenticated and isinstance(result, dict) else None)
-
-    if node.authenticated:
-        try:
-            server.emit_server_event(
+    try:
+        node.authenticated = authentication_succeeded(result)
+        node.set_context(
+            result if node.authenticated and isinstance(result, dict) else None
+        )
+        if node.authenticated:
+            await server.emit_server_event_async(
                 ServerEvents.AUTHENTICATION, node, raise_on_error=True
             )
-        except Exception:
-            _log.exception("Server authentication listener raised; failing closed")
-            node.authenticated = False
-            node.set_context(None)
+    except Exception:
+        _log.exception("Server authentication hook raised; failing closed")
+        node.authenticated = False
+        node.set_context(None)
+        if node.socket is not None and node.socket.readyState == SocketState.OPEN:
             await node.emit_auth_result(False)
-            return
+        return
+
+    if node.socket is None or node.socket.readyState != SocketState.OPEN:
+        return
 
     await node.emit_auth_result(node.authenticated)
 

@@ -263,12 +263,12 @@ def _escape_to_json(obj: dict[str, Any], _depth: int = 0) -> dict[str, Any]:
 def _escape_from_json(obj: dict[str, Any], _depth: int = 0) -> dict[str, Any]:
     from typeferry.ejson.to_from_json_value import MAX_EJSON_DEPTH, from_json_value
 
-    if _depth >= MAX_EJSON_DEPTH:
+    if _depth + 1 >= MAX_EJSON_DEPTH:
         raise ValueError("EJSON nesting depth exceeds maximum")
     inner = obj["$escape"]
     if not isinstance(inner, dict):
         raise ValueError("$escape value must be an object")
-    return {k: from_json_value(v, _depth + 1) for k, v in inner.items()}
+    return {k: from_json_value(v, _depth + 2) for k, v in inner.items()}
 
 
 _ESCAPE_CONVERTER = Converter(

@@ -181,19 +181,34 @@ class RedisTransport:
             if not isinstance(decoded, dict):
                 continue
             event = decoded.get("event")
-            channel = decoded.get("channel") or NO_CHANNEL
+            raw_channel = decoded.get("channel")
             message = decoded.get("message")
             exclude_uuid = decoded.get("excludeUuid")
 
-            if (
-                not isinstance(event, str)
-                or not isinstance(channel, str)
-                or not isinstance(message, str)
-            ):
+            if raw_channel is None:
+                channel = NO_CHANNEL
+            elif isinstance(raw_channel, str):
+                channel = raw_channel or NO_CHANNEL
+            else:
                 continue
 
-            await self.server.channel(channel).propagate(
-                event,
-                message,
-                exclude_uuid if isinstance(exclude_uuid, str) else None,
-            )
+            if not isinstance(event, str) or not isinstance(message, str):
+                continue
+
+            target = self.server.lookup_channel(channel)
+            if target is None:
+                # Propagate using a transient ServerChannel so inbound Redis
+                # messages never grow Server.channels unboundedly.
+                from typeferry.server.server_channel import ServerChannel
+
+                target = ServerChannel(channel)
+                target.set_server(self.server)
+
+            try:
+                await target.propagate(
+                    event,
+                    message,
+                    exclude_uuid if isinstance(exclude_uuid, str) else None,
+                )
+            except Exception:
+                _log.exception("Failed propagating Redis event %s", event)

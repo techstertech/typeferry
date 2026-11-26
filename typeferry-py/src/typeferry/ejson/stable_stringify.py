@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 _MAX_ARRAY_INDEX = 2**32 - 2
+_MAX_EJSON_DEPTH = 128
 
 
 def _array_index(key: str) -> bool:
@@ -19,22 +20,31 @@ def _array_index(key: str) -> bool:
     )
 
 
-def javascript_object_order(value: Any, *, canonical: bool = False) -> Any:
+def javascript_object_order(
+    value: Any, *, canonical: bool = False, _depth: int = 0
+) -> Any:
     """Reproduce JSON.stringify property order, including canonical UTF-16 keys.
 
     JavaScript enumerates array-index properties numerically even after a
     canonical sort. Other keys retain insertion order or sort by UTF-16 units.
     """
 
+    if _depth > _MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
     if isinstance(value, list):
-        return [javascript_object_order(item, canonical=canonical) for item in value]
+        return [
+            javascript_object_order(item, canonical=canonical, _depth=_depth + 1)
+            for item in value
+        ]
     if isinstance(value, dict):
         indices = sorted((key for key in value if _array_index(key)), key=int)
         remaining = [key for key in value if not _array_index(key)]
         if canonical:
             remaining.sort(key=lambda key: key.encode("utf-16-be", errors="surrogatepass"))
         return {
-            key: javascript_object_order(value[key], canonical=canonical)
+            key: javascript_object_order(
+                value[key], canonical=canonical, _depth=_depth + 1
+            )
             for key in [*indices, *remaining]
         }
     return value
@@ -53,10 +63,13 @@ def stable_stringify(value: Any, indent: int | str | None = None) -> str:
       before reaching this function.
     """
 
-    return json.dumps(
-        javascript_object_order(value, canonical=True),
-        indent=indent,
-        separators=(",", ":") if indent is None else None,
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+    try:
+        return json.dumps(
+            javascript_object_order(value, canonical=True),
+            indent=indent,
+            separators=(",", ":") if indent is None else None,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except RecursionError as exc:
+        raise ValueError("EJSON nesting depth exceeds maximum") from exc

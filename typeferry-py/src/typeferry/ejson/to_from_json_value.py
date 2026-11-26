@@ -75,17 +75,20 @@ def to_json_value(item: Any, depth: int = 0) -> Any:
     if depth > MAX_EJSON_DEPTH:
         raise ValueError("EJSON nesting depth exceeds maximum")
 
-    changed = _try_to_json_value(item, depth)
-    if changed is not _SENTINEL:
-        return changed
+    try:
+        changed = _try_to_json_value(item, depth)
+        if changed is not _SENTINEL:
+            return changed
 
-    if isinstance(item, dict):
-        return {key: to_json_value(value, depth + 1) for key, value in item.items()}
-    if isinstance(item, list):
-        return [to_json_value(value, depth + 1) for value in item]
-    if isinstance(item, tuple):
-        # JSON has no tuple; mirror JS array behavior.
-        return [to_json_value(value, depth + 1) for value in item]
+        if isinstance(item, dict):
+            return {key: to_json_value(value, depth + 1) for key, value in item.items()}
+        if isinstance(item, list):
+            return [to_json_value(value, depth + 1) for value in item]
+        if isinstance(item, tuple):
+            # JSON has no tuple; mirror JS array behavior.
+            return [to_json_value(value, depth + 1) for value in item]
+    except RecursionError as exc:
+        raise ValueError("EJSON nesting depth exceeds maximum") from exc
 
     return item
 
@@ -96,13 +99,16 @@ def from_json_value(item: Any, depth: int = 0) -> Any:
     if depth > MAX_EJSON_DEPTH:
         raise ValueError("EJSON nesting depth exceeds maximum")
 
-    changed = _try_from_json_value(item, depth)
-    if changed is not _SENTINEL:
-        return changed
+    try:
+        changed = _try_from_json_value(item, depth)
+        if changed is not _SENTINEL:
+            return changed
 
-    if isinstance(item, dict):
-        return {key: from_json_value(value, depth + 1) for key, value in item.items()}
-    if isinstance(item, list):
-        return [from_json_value(value, depth + 1) for value in item]
+        if isinstance(item, dict):
+            return {key: from_json_value(value, depth + 1) for key, value in item.items()}
+        if isinstance(item, list):
+            return [from_json_value(value, depth + 1) for value in item]
+    except RecursionError as exc:
+        raise ValueError("EJSON nesting depth exceeds maximum") from exc
 
     return item

@@ -44,6 +44,12 @@ class SlidingWindowLimiter:
     """
 
     def __init__(self, limit: RateLimit, *, max_buckets: int = MAX_LIMITER_BUCKETS) -> None:
+        if (
+            isinstance(max_buckets, bool)
+            or not isinstance(max_buckets, int)
+            or max_buckets <= 0
+        ):
+            raise ValueError("max_buckets must be a positive integer")
         self.limit = limit
         self._max_buckets = max_buckets
         self._buckets: OrderedDict[str, deque[float]] = OrderedDict()

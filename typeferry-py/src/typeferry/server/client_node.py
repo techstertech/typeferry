@@ -108,7 +108,7 @@ class ClientNode:
             user_id = user.get("_id")
             if user_id is None:
                 user_id = user.get("id")
-        if user_id is None or isinstance(user_id, bool) or not user_id:
+        if isinstance(user_id, bool) or not isinstance(user_id, (str, int)) or not user_id:
             return
         self.user_id = str(user_id)
         self.user = user if isinstance(user, dict) else None

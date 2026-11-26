@@ -52,6 +52,7 @@ class InMemorySessionManager:
     def __init__(self, config: AuthConfig) -> None:
         self.config = config
         self._sessions: dict[str, Session] = {}
+        self._grace_used_at_ms: dict[str, float] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
@@ -159,12 +160,14 @@ class InMemorySessionManager:
             session = self._sessions[key]
             if session.is_revoked or session.expiration <= now:
                 self._sessions.pop(key, None)
+                self._grace_used_at_ms.pop(key, None)
 
     def destroy(self) -> None:
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
             self._cleanup_task = None
         self._sessions.clear()
+        self._grace_used_at_ms.clear()
 
     @property
     def size(self) -> int:
@@ -177,6 +180,9 @@ class InMemorySessionManager:
     async def _rotate_session(
         self, session: Session, device_info: DeviceInfo | None
     ) -> TokenPair:
+        if len(self._sessions) >= 10_000:
+            self._cleanup()
+
         new_token = _fresh_id()
         new_session_id = _fresh_id()
         expiration = _now_seconds() + self.config.refresh_token_expiry_days * 86400
@@ -191,22 +197,31 @@ class InMemorySessionManager:
         )
 
         session.replaced_by = new_token
-        session.used_at = time.monotonic() * 1000
+        session.used_at = time.time() * 1000
+        self._grace_used_at_ms[session.token] = time.monotonic() * 1000
         self._sessions[new_token] = new_session
         return self._build_token_pair(new_token, session.user_id, new_session_id)
 
+    def _revoke_family_sync(self, family_id: str) -> None:
+        for s in self._sessions.values():
+            if s.family_id == family_id and not s.is_revoked:
+                s.is_revoked = True
+
     def _handle_reused_token(self, session: Session) -> TokenPair | None:
-        grace_ms = self.config.rotation_grace_period_seconds * 1000
+        grace_seconds = self.config.rotation_grace_period_seconds
+        used_mono = self._grace_used_at_ms.get(session.token)
         now_ms = time.monotonic() * 1000
 
-        if session.used_at is None or (now_ms - session.used_at) > grace_ms:
-            # Out of grace → theft. Revoke the family.
-            for s in self._sessions.values():
-                if s.family_id == session.family_id and not s.is_revoked:
-                    s.is_revoked = True
+        if (
+            grace_seconds <= 0
+            or used_mono is None
+            or (now_ms - used_mono) > grace_seconds * 1000
+        ):
+            self._revoke_family_sync(session.family_id)
             return None
 
         if session.replaced_by is None:
+            self._revoke_family_sync(session.family_id)
             return None
         next_session = self._sessions.get(session.replaced_by)
         if (
@@ -215,6 +230,7 @@ class InMemorySessionManager:
             or next_session.replaced_by is not None
             or _now_seconds() > next_session.expiration
         ):
+            self._revoke_family_sync(session.family_id)
             return None
         return self._build_token_pair(
             next_session.token, next_session.user_id, next_session.id

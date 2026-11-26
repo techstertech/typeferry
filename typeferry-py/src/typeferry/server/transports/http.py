@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
-_VALID_CLIENT_ID = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
+_VALID_CLIENT_ID = re.compile(r"\A[a-zA-Z0-9-]{1,64}\Z")
 
 
 class HttpTransport:
@@ -173,8 +173,8 @@ class HttpTransport:
 
         method_name = payload.get("method")
         if not isinstance(method_name, str) or not method_name:
-            # METHOD_NOT_FOUND: TS envelope carries method, no uuid.
-            return self._error(Errors.METHOD_NOT_FOUND.value, None, method_name, is_void)
+            # METHOD_NOT_FOUND: TS envelope carries method when string, never unvalidated types.
+            return self._error(Errors.METHOD_NOT_FOUND.value, None, None, is_void)
 
         method = self.server.get_method(method_name)
         if method is None:
@@ -182,7 +182,8 @@ class HttpTransport:
 
         node: ClientNode | None = None
         try:
-            node = await self._build_client_node(request, transport.get("context"), client_address)
+            node, raw_headers = self._create_client_node(request, client_address)
+            await self._authenticate_client_node(node, raw_headers, transport.get("context"))
 
             if method.is_protected and not node.authenticated:
                 # METHOD_FORBIDDEN: TS envelope carries method, no uuid.
@@ -205,8 +206,9 @@ class HttpTransport:
                 headers=self._drain_response_headers(node) if node is not None else None,
             )
         except SchemaValidationError as err:
+            drained = self._drain_response_headers(node) if node is not None else None
             if is_void:
-                return _empty_200()
+                return _empty_200(headers=drained)
             # SchemaValidationError: TS envelope carries uuid + errors, no method.
             return self._error(
                 err.message,
@@ -214,7 +216,7 @@ class HttpTransport:
                 None,
                 is_void,
                 errors=err.errors,
-                headers=self._drain_response_headers(node) if node is not None else None,
+                headers=drained,
             )
         except Exception:
             # Unknown errors MUST NOT leak server internals; log and emit
@@ -231,6 +233,9 @@ class HttpTransport:
                 is_void,
                 headers=self._drain_response_headers(node) if node is not None else None,
             )
+        finally:
+            if node is not None:
+                self.server._remove_client_from_user_index(node)
 
         # Per PROTOCOL.md §2.1.3 / TS parity: void suppresses error
         # responses, NOT success responses. The success body is always
@@ -252,9 +257,9 @@ class HttpTransport:
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _build_client_node(
-        self, request: Request, context: Any, client_address: str
-    ) -> ClientNode:
+    def _create_client_node(
+        self, request: Request, client_address: str
+    ) -> tuple[ClientNode, dict[str, str]]:
         raw_headers: dict[str, str] = {}
         for k, v in request.headers.items():
             lower = k.lower()
@@ -271,7 +276,11 @@ class HttpTransport:
         # Pending response headers (e.g. Set-Cookie) are queued on a
         # transport-scoped attribute drained after method execution.
         setattr(node, "_pending_response_headers", [])  # noqa: B010
+        return node, raw_headers
 
+    async def _authenticate_client_node(
+        self, node: ClientNode, raw_headers: dict[str, str], context: Any
+    ) -> None:
         ctx_payload: dict[str, Any] = {}
         if isinstance(context, dict) and self.server.allowed_context_keys:
             for key in self.server.allowed_context_keys:
@@ -283,7 +292,7 @@ class HttpTransport:
             ctx_payload["token"] = cleaned
 
         if self.server.auth is None:
-            return node
+            return
 
         result = self.server.auth(node, ctx_payload)
         if inspect.isawaitable(result):
@@ -291,7 +300,6 @@ class HttpTransport:
 
         node.authenticated = authentication_succeeded(result)
         node.set_context(result if node.authenticated and isinstance(result, dict) else None)
-        return node
 
     def _drain_response_headers(self, node: ClientNode) -> list[tuple[str, str]]:
         pending: list[tuple[str, str]] = getattr(
@@ -310,7 +318,7 @@ class HttpTransport:
         headers: list[tuple[str, str]] | None = None,
     ) -> Response:
         if is_void:
-            return _empty_200()
+            return _empty_200(headers=headers)
         body: dict[str, Any] = {"type": PayloadType.ERROR.value, "message": message}
         if uuid is not None:
             body["uuid"] = uuid
@@ -383,8 +391,12 @@ def _ejson_response(
     return response
 
 
-def _empty_200() -> Response:
-    return Response("", status_code=200, media_type="text/plain; charset=utf-8")
+def _empty_200(*, headers: list[tuple[str, str]] | None = None) -> Response:
+    response = Response("", status_code=200, media_type="text/plain; charset=utf-8")
+    if headers:
+        for name, value in headers:
+            response.headers.append(name, value)
+    return response
 
 
 def _client_ip(request: Request) -> str:

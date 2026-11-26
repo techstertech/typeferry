@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -416,3 +417,190 @@ async def test_redis_channel_type_validation_and_parallel_propagate() -> None:
 
     await redis_t._listen(FakePubSub())
     assert delivered == ['{"t":"event"}']
+
+
+@pytest.mark.asyncio
+async def test_python_post_review_hardening_regressions() -> None:
+    # 1) Async AUTHENTICATION listener errors must fail closed on authenticate_node
+    server = Server(ServerOptions())
+    server.is_auth_enabled = True
+
+    async def async_bad_listener(_node: ClientNode) -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("async auth listener failure")
+
+    server.on_server_event(ServerEvents.AUTHENTICATION, async_bad_listener)
+
+    class Sock:
+        readyState = SocketState.OPEN
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+        async def close(self, code: int = 1000) -> None:
+            self.readyState = SocketState.CLOSED
+
+    node = ClientNode(server, socket=Sock())
+    await authenticate_node(
+        server,
+        node,
+        "tok",
+        handshake_authenticator=lambda _n, _h: {"user": {"_id": "u-async"}},
+    )
+    assert node.authenticated is False
+    assert node.context == {}
+
+    # 2) rpc:off bounds + non-string channel + closed socket guard
+    ws_t = WebSocketTransport(server)
+    server.websocket_transport = ws_t
+    server.add_event("ev")
+    s_open = Sock()
+    sub_node = ClientNode(server, socket=s_open)
+    assert await server.call_method_on_node(
+        "rpc:off", {"events": ["ev" for _ in range(257)]}, sub_node
+    ) == {}
+    assert await server.call_method_on_node(
+        "rpc:off", {"events": ["ev"], "channel": "é" * 200}, sub_node
+    ) == {}
+    assert await server.call_method_on_node(
+        "rpc:off", {"events": ["ev"], "channel": ["bad"]}, sub_node
+    ) == {}
+    s_open.readyState = SocketState.CLOSED
+    assert await server.call_method_on_node("rpc:on", {"events": ["ev"]}, sub_node) == {}
+
+    # 3) HTTP cleanup in finally, client-id trailing newline rejected, non-string method not echoed, Set-Cookie kept on void error
+    http_srv = Server(ServerOptions())
+
+    async def cookie_auth(n: ClientNode, _c: dict[str, Any]) -> dict[str, Any]:
+        pending = n.__dict__.get("_pending_response_headers")
+        assert isinstance(pending, list)
+        pending.append(("set-cookie", "a=1"))
+        return {"user": {"_id": "u-http"}}
+
+    from typeferry.server.server import AuthSetup
+
+    http_srv.set_auth(AuthSetup(auth=cookie_auth, log_in=lambda _n, _p: True))
+
+    async def inspect_id_and_fail(n: ClientNode, _p: Any) -> None:
+        assert n.uuid != "good-id\n"
+        raise PublicError("boom")
+
+    http_srv.add_method("failme", inspect_id_and_fail)
+    http_t = HttpTransport(http_srv, rate_limit=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(http_t.app), base_url="http://test"
+    ) as client:
+        r_void = await client.post(
+            "/__h",
+            content=json.dumps({"payload": {"method": "failme", "void": True}}),
+            headers={"x-client-id": "good-id\n"},
+        )
+        assert r_void.status_code == 200
+        assert r_void.headers.get("set-cookie") == "a=1"
+        assert http_srv.get_clients_by_user_id("u-http") == frozenset()
+
+        r_bad_method = await client.post(
+            "/__h",
+            content=json.dumps({"payload": {"method": ["bad"]}}),
+        )
+        assert "method" not in r_bad_method.json()
+
+    # 4) WS invalid request consumes rate limit and binary frame doesn't kill loop
+    rl_srv = Server(ServerOptions())
+    rl_srv.add_method("ok", lambda _n, _p: True)
+    rl_ws_t = WebSocketTransport(rl_srv, rate_limit=RateLimit(max=2, interval_ms=60_000))
+    rl_srv.websocket_transport = rl_ws_t
+    with (
+        TestClient(Starlette(routes=rl_ws_t.routes())) as tc,
+        tc.websocket_connect(TYPEFERRY_WS_PATH) as ws,
+    ):
+            assert ws.receive_json() == {"t": "auth", "authenticated": False}
+            ws.send_bytes(b"\x00\x01\x02")
+            ws.send_text(json.dumps({"t": "rpc", "id": "b1", "method": 123}))
+            assert ws.receive_json()["error"] == Errors.INVALID_REQUEST.value
+            ws.send_text(json.dumps({"t": "rpc", "id": "b2", "method": 123}))
+            assert ws.receive_json()["error"] == Errors.INVALID_REQUEST.value
+            ws.send_text(json.dumps({"t": "rpc", "id": "b3", "method": 123}))
+            assert ws.receive_json()["error"] == Errors.RATE_LIMIT_EXCEEDED.value
+
+    # 5) Rate limiter max_buckets <= 0 rejected
+    with pytest.raises(ValueError):
+        SlidingWindowLimiter(RateLimit(), max_buckets=0)
+
+    # 6) Redis _listen ignores unknown channel without allocating Server.channels entry and falsy bad channel
+    r_srv = Server(ServerOptions())
+    r_srv.add_event("ping")
+    from typeferry.server.transports.redis import RedisTransport
+
+    rt = RedisTransport(r_srv)
+
+    class OnlyZeroChannel:
+        async def listen(self) -> Any:
+            yield {
+                "type": "message",
+                "data": json.dumps({"event": "ping", "channel": [], "message": "{}"}),
+            }
+            yield {
+                "type": "message",
+                "data": json.dumps({"event": "ping", "channel": "unsubscribed-flood", "message": "{}"}),
+            }
+
+    await rt._listen(OnlyZeroChannel())
+    assert "unsubscribed-flood" not in r_srv.channels
+
+    # 7) Session grace=0 rejected strictly, public used_at is Unix ms, JWT inf/nan rejected
+    cfg_zero = AuthConfig(secret="super-secret-key", rotation_grace_period_seconds=0)
+    mgr_zero = InMemorySessionManager(cfg_zero)
+    s_a = await mgr_zero.create_session("u1")
+    s_b = await mgr_zero.refresh_session(s_a.refresh_token)
+    assert s_b is not None
+    stored_a = mgr_zero._sessions[s_a.refresh_token]
+    assert stored_a.used_at is not None and stored_a.used_at > 1_000_000_000_000
+    assert await mgr_zero.refresh_session(s_a.refresh_token) is None
+
+    nan_tok = pyjwt.encode({"userId": "u", "sessionId": "s", "iat": 1e400, "exp": 1e400}, "super-secret-key", algorithm="HS256")
+    assert verify_access_token(nan_tok, cfg_zero) is None
+
+    # 8) EJSON base64 non-zero unused bits rejected + nested $escape depth 128 rejected + RecursionError wrapped as ValueError
+    with pytest.raises(ValueError):
+        decode_base64("AB==")
+    with pytest.raises(ValueError):
+        nested = {"$date": 0}
+        for _ in range(129):
+            nested = {"$escape": nested}
+        from typeferry.ejson.parse_stringify import stringify
+        stringify(nested)
+    with pytest.raises(ValueError):
+        deep_eq_a: Any = 1
+        deep_eq_b: Any = 1
+        for _ in range(1200):
+            deep_eq_a = [deep_eq_a]
+            deep_eq_b = [deep_eq_b]
+        from typeferry.ejson.equals import equals
+        equals(deep_eq_a, deep_eq_b)
+
+    # 9) Async method memoize timestamp recorded after await
+    m_srv = Server(ServerOptions())
+    slow_calls = 0
+
+    async def slow_cached(_n: ClientNode, _p: Any) -> str:
+        nonlocal slow_calls
+        slow_calls += 1
+        await asyncio.sleep(0.06)
+        return "fresh"
+
+    m_srv.add_method("slow_c", slow_cached, MethodOptions(cache=True, max_age=80))
+    anon = ClientNode(m_srv)
+    assert await m_srv.call_method_on_node("slow_c", 1, anon) == "fresh"
+    await asyncio.sleep(0.04)  # elapsed from entry ~100ms (>80ms), from settlement ~40ms (<80ms)
+    assert await m_srv.call_method_on_node("slow_c", 1, anon) == "fresh"
+    assert slow_calls == 1
+
+    # 10) ClientNode unhashable dict user._id ignored cleanly
+    cn = ClientNode(m_srv)
+    cn.authenticated = True
+    cn.set_context({"user": {"_id": {"nested": 1}}})
+    assert cn.user_id is None

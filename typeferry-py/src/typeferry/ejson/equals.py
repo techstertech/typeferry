@@ -11,7 +11,7 @@ from typing import Any
 
 from typeferry.ejson.converters import _EpochMilliseconds
 from typeferry.ejson.custom_types import is_custom_type
-from typeferry.ejson.to_from_json_value import to_json_value
+from typeferry.ejson.to_from_json_value import MAX_EJSON_DEPTH, to_json_value
 
 
 def _both_nan(a: Any, b: Any) -> bool:
@@ -40,6 +40,18 @@ def equals(a: Any, b: Any, *, key_order_sensitive: bool = False) -> bool:
     * arrays element-wise; length must match
     * objects key-by-key; order sensitivity is caller-selected
     """
+
+    try:
+        return _equals(a, b, key_order_sensitive=key_order_sensitive, depth=0)
+    except RecursionError as exc:
+        raise ValueError("EJSON nesting depth exceeds maximum") from exc
+
+
+def _equals(
+    a: Any, b: Any, *, key_order_sensitive: bool, depth: int
+) -> bool:
+    if depth > MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
 
     if a is b:
         return True
@@ -88,7 +100,7 @@ def equals(a: Any, b: Any, *, key_order_sensitive: bool = False) -> bool:
         if len(a) != len(b):
             return False
         return all(
-            equals(x, y, key_order_sensitive=key_order_sensitive)
+            _equals(x, y, key_order_sensitive=key_order_sensitive, depth=depth + 1)
             for x, y in zip(a, b, strict=False)
         )
 
@@ -97,10 +109,11 @@ def equals(a: Any, b: Any, *, key_order_sensitive: bool = False) -> bool:
     if custom_sum == 1:
         return False
     if custom_sum == 2:
-        return equals(
+        return _equals(
             to_json_value(a),
             to_json_value(b),
             key_order_sensitive=key_order_sensitive,
+            depth=depth + 1,
         )
 
     # Dict / dict.
@@ -109,11 +122,13 @@ def equals(a: Any, b: Any, *, key_order_sensitive: bool = False) -> bool:
             return False
         if key_order_sensitive:
             return all(
-                ak == bk and equals(av, b[bk], key_order_sensitive=True)
+                ak == bk
+                and _equals(av, b[bk], key_order_sensitive=True, depth=depth + 1)
                 for (ak, av), bk in zip(a.items(), b.keys(), strict=False)
             )
         return all(
-            key in b and equals(value, b[key], key_order_sensitive=False)
+            key in b
+            and _equals(value, b[key], key_order_sensitive=False, depth=depth + 1)
             for key, value in a.items()
         )
 

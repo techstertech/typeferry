@@ -7,6 +7,7 @@ snake_case field names and this module translates at the boundary.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import Any
@@ -55,9 +56,9 @@ def _payload_from_wire(decoded: dict[str, Any]) -> AccessTokenPayload:
         raise ValueError("Invalid userId claim")
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("Invalid sessionId claim")
-    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)) or not math.isfinite(iat):
         raise ValueError("Invalid iat claim")
-    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp):
         raise ValueError("Invalid exp claim")
     return AccessTokenPayload(
         user_id=user_id,
@@ -102,16 +103,15 @@ def verify_access_token(
         return None
 
     iat = decoded.get("iat")
-    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)) or not math.isfinite(iat):
         return None
     now = time.time()
     max_age = config.access_token_expiry_minutes * 60
-    if (now - iat) > max_age or iat > (now + 5):
-        return None
-
     try:
+        if (now - iat) > max_age or iat > (now + 5):
+            return None
         return _payload_from_wire(decoded)
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, OverflowError):
         return None
 
 

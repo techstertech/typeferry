@@ -173,8 +173,9 @@ def _memoize(
         if node is not None and (node.authenticated or node.is_server):
             return result
 
+        settled_ms = time.monotonic() * 1000
         if len(cache) >= max_entries:
-            expired = [k for k, (_, ts) in cache.items() if (now_ms - ts) >= max_age_ms]
+            expired = [k for k, (_, ts) in cache.items() if (settled_ms - ts) >= max_age_ms]
             for k in expired:
                 cache.pop(k, None)
             if len(cache) >= max_entries:
@@ -182,7 +183,7 @@ def _memoize(
                 if oldest is not None:
                     cache.pop(oldest, None)
 
-        cache[key] = (result, now_ms)
+        cache[key] = (result, settled_ms)
         return result
 
     return memoized
