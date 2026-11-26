@@ -64,6 +64,9 @@ jobs:
           go test -race ./...
           go vet ./...
 
+      - name: Security audit
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
   ci-ts:
     name: CI (typeferry-ts)
     runs-on: ubuntu-24.04
@@ -224,6 +227,12 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -e ".[all,dev]"
 
+      - name: Security audit
+        run: |
+          python3 -m venv .audit-venv
+          .audit-venv/bin/pip install --quiet pip-audit
+          .audit-venv/bin/pip-audit --skip-editable --path "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+
       - name: Lint Python
         run: .venv/bin/python -m ruff check .
 
@@ -249,6 +258,14 @@ jobs:
         run: |
           rustup toolchain install stable --component rustfmt --component clippy
           rustup default stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
+        with:
+          tool: cargo-deny
+
+      - name: Security audit
+        run: cargo deny check advisories
 
       - name: Verify Rust server
         run: |
@@ -279,6 +296,9 @@ jobs:
 
       - run: npm ci
         timeout-minutes: 10
+
+      - name: Security audit
+        run: npm audit --audit-level=low
 
       - name: Verify template
         run: |
