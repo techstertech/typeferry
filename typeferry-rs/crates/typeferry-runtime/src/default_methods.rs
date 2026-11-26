@@ -45,23 +45,37 @@ const MAX_EVENTS_PER_CALL: usize = 256;
 const MAX_CHANNEL_BYTES: usize = 256;
 const MAX_ROOMS_PER_CLIENT: usize = 1024;
 
+fn parse_subscription_params(params: &Value) -> Option<(Vec<String>, String)> {
+    let obj = params.as_object()?;
+    let raw_events = obj.get("events").and_then(|v| v.as_array());
+    if raw_events.is_some_and(|arr| arr.len() > MAX_EVENTS_PER_CALL) {
+        return None;
+    }
+    let channel = match obj.get("channel") {
+        None | Some(Value::Null) => NO_CHANNEL.to_string(),
+        Some(Value::String(s)) if s.is_empty() => NO_CHANNEL.to_string(),
+        Some(Value::String(s)) if s.len() <= MAX_CHANNEL_BYTES => s.clone(),
+        Some(_) => return None,
+    };
+    let events = raw_events
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((events, channel))
+}
+
 /// `rpc:on` — subscribe a connected client to a list of events on a
 /// channel. Returns `{ event_name: bool }` per-event success.
 fn rpc_on(server: Arc<Server>) -> RpcHandler {
     Arc::new(move |node: Arc<ClientNode>, params: Value| {
         let server = server.clone();
         async move {
-            let raw_len = params
-                .get("events")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-            let channel = channel_or_default(&params);
-            if raw_len > MAX_EVENTS_PER_CALL || channel.len() > MAX_CHANNEL_BYTES {
+            let Some((events, channel)) = parse_subscription_params(&params) else {
                 return Ok(Value::Object(Map::new())) as BoxResult;
-            }
-
-            let events = events_list(&params);
+            };
             if events.is_empty() {
                 return Ok(Value::Object(Map::new())) as BoxResult;
             }
@@ -96,8 +110,9 @@ fn rpc_off(server: Arc<Server>) -> RpcHandler {
     Arc::new(move |node: Arc<ClientNode>, params: Value| {
         let server = server.clone();
         async move {
-            let events = events_list(&params);
-            let channel = channel_or_default(&params);
+            let Some((events, channel)) = parse_subscription_params(&params) else {
+                return Ok(Value::Object(Map::new())) as BoxResult;
+            };
 
             // No socket → nothing to unsubscribe; return an empty map.
             let Some(socket) = node.socket.as_ref().cloned() else {
@@ -127,18 +142,18 @@ fn rpc_off(server: Arc<Server>) -> RpcHandler {
     })
 }
 
-/// `rpc:logout` — leave rooms and clear auth state on the node. Always returns `true`.
+/// `rpc:logout` — clear auth, then leave rooms and remove user index entry.
 fn rpc_logout(server: Arc<Server>) -> RpcHandler {
     Arc::new(move |node: Arc<ClientNode>, _params: Value| {
         let server = server.clone();
         async move {
+            node.set_authenticated(false);
             if let Some(socket) = node.socket.as_ref()
                 && let Some(rooms) = server.rooms.read().ok().and_then(|opt| opt.clone())
             {
                 rooms.leave_all(&**socket);
             }
             server.remove_client_from_user_index(&node);
-            node.set_authenticated(false);
             Ok(json!(true)) as BoxResult
         }
         .boxed()
@@ -148,27 +163,6 @@ fn rpc_logout(server: Arc<Server>) -> RpcHandler {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-fn events_list(params: &Value) -> Vec<String> {
-    params
-        .get("events")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn channel_or_default(params: &Value) -> String {
-    params
-        .get("channel")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(NO_CHANNEL)
-        .to_string()
-}
 
 async fn can_subscribe(
     server: &Server,

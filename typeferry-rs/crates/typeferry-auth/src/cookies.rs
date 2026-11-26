@@ -7,20 +7,47 @@ fn default_secure() -> bool {
 }
 
 fn sanitize_cookie_name(name: &str) -> String {
-    name.chars()
-        .filter(|&c| !c.is_control() && c != ';' && c != '=' && !c.is_whitespace())
-        .collect()
+    let cleaned: String = name
+        .chars()
+        .filter(|&c| {
+            c.is_ascii_graphic()
+                && !matches!(
+                    c,
+                    '(' | ')'
+                        | '<'
+                        | '>'
+                        | '@'
+                        | ','
+                        | ';'
+                        | ':'
+                        | '\\'
+                        | '"'
+                        | '/'
+                        | '['
+                        | ']'
+                        | '?'
+                        | '='
+                        | '{'
+                        | '}'
+                )
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "bf_refresh".into()
+    } else {
+        cleaned
+    }
 }
 
 fn sanitize_cookie_path(path: &str) -> String {
     let cleaned: String = path
         .chars()
-        .filter(|&c| !c.is_control() && c != ';')
+        .filter(|&c| c.is_ascii() && !c.is_control() && c != ';')
         .collect();
-    if cleaned.is_empty() {
-        "/".into()
-    } else {
+    if cleaned.starts_with('/') {
         cleaned
+    } else {
+        "/".into()
     }
 }
 
@@ -116,5 +143,15 @@ mod tests {
     fn clear_sets_max_age_zero() {
         let header = clear_refresh_token_cookie("bf_refresh", "/", Some(false));
         assert!(header.contains("Max-Age=0"));
+    }
+
+    #[test]
+    fn empty_or_invalid_name_and_unrooted_path_fall_back_safely() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mut opts = CookieOptions::new("()<>@,;:\\\"/[]?={}", 7);
+        opts.path = "not-rooted".into();
+        let header = set_refresh_token_cookie("tok", &opts);
+        assert!(header.starts_with("bf_refresh=tok"));
+        assert!(header.contains("Path=/;"));
     }
 }

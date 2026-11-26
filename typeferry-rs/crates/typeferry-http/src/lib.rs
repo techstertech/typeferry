@@ -47,7 +47,7 @@ pub fn router_with_options(server: Arc<Server>, options: HttpOptions) -> Router 
 
     Router::new()
         .route(HTTP_ENDPOINT_PATH, endpoint)
-        .layer(DefaultBodyLimit::max(DEFAULT_HTTP_BODY_LIMIT))
+        .route_layer(DefaultBodyLimit::max(DEFAULT_HTTP_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(options, admit_origin))
         .with_state(server)
 }
@@ -104,6 +104,21 @@ async fn handle_rpc(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    handle_rpc_with_timeout(
+        server,
+        headers,
+        body,
+        Duration::from_millis(AUTH_TIMEOUT_MS),
+    )
+    .await
+}
+
+async fn handle_rpc_with_timeout(
+    server: Arc<Server>,
+    headers: HeaderMap,
+    body: Bytes,
+    auth_timeout: Duration,
+) -> Response {
     let body_str = match std::str::from_utf8(&body) {
         Ok(s) => s,
         Err(_) => return error_response(INVALID_REQUEST, None, None, false),
@@ -159,8 +174,9 @@ async fn handle_rpc(
         .filter(|s| !s.is_empty() && *s != "undefined")
         .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).to_string());
 
-    // Assemble the auth context JSON (context + token).
-    let mut ctx_json = typeferry_value_to_json(&context_value);
+    // Assemble filtered auth context JSON before injecting transport token.
+    let raw_ctx = typeferry_value_to_json(&context_value);
+    let mut ctx_json = server.filter_context(&raw_ctx);
     if !ctx_json.is_object() {
         ctx_json = Value::Object(Map::new());
     }
@@ -168,13 +184,10 @@ async fn handle_rpc(
         obj.insert("token".into(), Value::String(token));
     }
 
-    // Run the auth callback with timeout (5s); timeout fails closed as Null.
-    let auth_result = tokio::time::timeout(
-        Duration::from_millis(AUTH_TIMEOUT_MS),
-        server.run_auth(node.clone(), ctx_json),
-    )
-    .await
-    .unwrap_or(Value::Null);
+    // Run the auth callback with timeout; timeout fails closed as Null.
+    let auth_result = tokio::time::timeout(auth_timeout, server.run_auth(node.clone(), ctx_json))
+        .await
+        .unwrap_or(Value::Null);
     node.set_authenticated(!auth_result.is_null());
     node.set_context(auth_result);
 
@@ -296,4 +309,46 @@ impl IntoResponse for HttpTransportError {
 
 pub enum HttpTransportError {
     Internal,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+    use http_body_util::BodyExt;
+    use serde_json::json;
+    use typeferry_runtime::{MethodOptions, ServerOptions};
+
+    #[tokio::test]
+    async fn http_auth_timeout_fails_closed() {
+        let server = Server::new(ServerOptions::default());
+        server.set_auth(Arc::new(|_n, _ctx| {
+            async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                json!({"user": {"_id": "slow"}})
+            }
+            .boxed()
+        }));
+        server.add_method(
+            "secret",
+            Arc::new(|_n, _p| async move { Ok(json!(true)) }.boxed()),
+            MethodOptions {
+                protected: true,
+                ..Default::default()
+            },
+        );
+
+        let resp = handle_rpc_with_timeout(
+            server,
+            HeaderMap::new(),
+            Bytes::from_static(br#"{"payload":{"method":"secret"}}"#),
+            Duration::from_millis(25),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["type"], "error");
+        assert_eq!(parsed["message"], "Method Forbidden");
+    }
 }

@@ -96,3 +96,42 @@ async fn body_limit_4mib_and_bearer_strip_and_client_id_validation() {
         .unwrap();
     assert_eq!(resp_big.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+#[tokio::test]
+async fn http_context_filtered_by_allowed_keys() {
+    let server = Server::new(ServerOptions::default());
+    server.set_allowed_context_keys(vec!["locale".into(), "token".into(), "__proto__".into()]);
+    let seen = Arc::new(Mutex::new(None::<Value>));
+    let seen_c = seen.clone();
+    server.set_auth(Arc::new(move |_n, ctx| {
+        let seen_c = seen_c.clone();
+        async move {
+            *seen_c.lock().unwrap() = Some(ctx);
+            json!({"user": {"_id": "u1"}})
+        }
+        .boxed()
+    }));
+    server.add_method(
+        "ok",
+        Arc::new(|_n, _p| async move { Ok(json!(true)) }.boxed()),
+        MethodOptions::default(),
+    );
+
+    let app = router(server);
+    let resp = app
+        .oneshot(
+            Request::post("/__h")
+                .header("x-api-key", "Bearer real-tok")
+                .body(Body::from(
+                    r#"{"context":{"locale":"pt","role":"admin","token":"spoof"},"payload":{"method":"ok"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ctx = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(ctx.get("locale"), Some(&json!("pt")));
+    assert_eq!(ctx.get("role"), None);
+    assert_eq!(ctx.get("token"), Some(&json!("real-tok")));
+}

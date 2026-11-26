@@ -46,11 +46,15 @@ pub struct Server {
     pub channels: RwLock<HashMap<String, Arc<ServerChannel>>>,
     pub clients: RwLock<HashMap<String, Arc<ClientNode>>>,
     pub clients_by_user_id: RwLock<HashMap<String, HashSet<String>>>,
+    user_by_client_uuid: RwLock<HashMap<String, String>>,
+    allowed_context_keys: RwLock<HashSet<String>>,
     pub rooms: Arc<RwLock<Option<Arc<RoomRegistry>>>>,
     pub is_auth_enabled: RwLock<bool>,
     pub auth_fn: RwLock<Option<AuthFn>>,
     pub channel_auth: RwLock<Option<ChannelAuthFn>>,
 }
+
+const MAX_CACHED_CHANNELS: usize = 10_000;
 
 impl Server {
     pub fn new(options: ServerOptions) -> Arc<Self> {
@@ -62,6 +66,8 @@ impl Server {
             channels: RwLock::new(HashMap::new()),
             clients: RwLock::new(HashMap::new()),
             clients_by_user_id: RwLock::new(HashMap::new()),
+            user_by_client_uuid: RwLock::new(HashMap::new()),
+            allowed_context_keys: RwLock::new(HashSet::new()),
             rooms: Arc::new(RwLock::new(None)),
             is_auth_enabled: RwLock::new(false),
             auth_fn: RwLock::new(None),
@@ -154,6 +160,44 @@ impl Server {
         self.methods.read().ok()?.get(name).cloned()
     }
 
+    pub fn set_allowed_context_keys(&self, keys: Vec<String>) {
+        let mut allowed = self
+            .allowed_context_keys
+            .write()
+            .expect("allowed_context_keys poisoned");
+        allowed.clear();
+        for key in keys {
+            if !key.is_empty()
+                && !matches!(
+                    key.as_str(),
+                    "__proto__" | "constructor" | "prototype" | "token" | "user"
+                )
+            {
+                allowed.insert(key);
+            }
+        }
+    }
+
+    pub fn filter_context(&self, value: &Value) -> Value {
+        let Some(source) = value.as_object() else {
+            return Value::Object(serde_json::Map::new());
+        };
+        let allowed = self
+            .allowed_context_keys
+            .read()
+            .expect("allowed_context_keys poisoned");
+        if allowed.is_empty() {
+            return Value::Object(serde_json::Map::new());
+        }
+        let mut filtered = serde_json::Map::new();
+        for key in allowed.iter() {
+            if let Some(val) = source.get(key) {
+                filtered.insert(key.clone(), val.clone());
+            }
+        }
+        Value::Object(filtered)
+    }
+
     pub fn channel(&self, name: &str) -> Arc<ServerChannel> {
         if name.is_empty() || name == NO_CHANNEL {
             return self
@@ -175,10 +219,13 @@ impl Server {
             self.events.clone(),
             self.rooms.clone(),
         ));
-        self.channels
-            .write()
-            .expect("channels poisoned")
-            .insert(name.to_string(), new_channel.clone());
+        let mut channels = self.channels.write().expect("channels poisoned");
+        if let Some(existing) = channels.get(name) {
+            return existing.clone();
+        }
+        if channels.len() < MAX_CACHED_CHANNELS {
+            channels.insert(name.to_string(), new_channel.clone());
+        }
         new_channel
     }
 
@@ -221,23 +268,46 @@ impl Server {
 
     pub fn refresh_client_user_index(&self, node: &ClientNode) {
         let uuid = node.uuid();
-        if let Some(user_id) = node.user_id.read().ok().and_then(|opt| opt.clone()) {
-            self.clients_by_user_id
-                .write()
-                .expect("user index poisoned")
-                .entry(user_id)
-                .or_default()
-                .insert(uuid);
+        let next_user = node.user_id.read().ok().and_then(|opt| opt.clone());
+        let mut by_client = self
+            .user_by_client_uuid
+            .write()
+            .expect("user_by_client_uuid poisoned");
+        let mut index = self
+            .clients_by_user_id
+            .write()
+            .expect("user index poisoned");
+
+        if let Some(prev_user) = by_client.get(&uuid).cloned()
+            && next_user.as_ref() != Some(&prev_user)
+        {
+            if let Some(nodes) = index.get_mut(&prev_user) {
+                nodes.remove(&uuid);
+                if nodes.is_empty() {
+                    index.remove(&prev_user);
+                }
+            }
+            by_client.remove(&uuid);
+        }
+        if let Some(user_id) = next_user {
+            by_client.insert(uuid.clone(), user_id.clone());
+            index.entry(user_id).or_default().insert(uuid);
         }
     }
 
     pub fn remove_client_from_user_index(&self, node: &ClientNode) {
         let uuid = node.uuid();
-        if let Some(user_id) = node.user_id.read().ok().and_then(|opt| opt.clone()) {
-            let mut index = self
-                .clients_by_user_id
-                .write()
-                .expect("user index poisoned");
+        let tracked = self
+            .user_by_client_uuid
+            .write()
+            .expect("user_by_client_uuid poisoned")
+            .remove(&uuid);
+        let fallback = node.user_id.read().ok().and_then(|opt| opt.clone());
+        let mut index = self
+            .clients_by_user_id
+            .write()
+            .expect("user index poisoned");
+        for user_id in [tracked, fallback].into_iter().flatten() {
             if let Some(nodes) = index.get_mut(&user_id) {
                 nodes.remove(&uuid);
                 if nodes.is_empty() {
@@ -275,6 +345,9 @@ impl Server {
         let m = self
             .get_method(method)
             .ok_or_else(|| TypeFerryError::MethodNotFound(method.to_string()))?;
+        if m.is_protected && !node.is_authenticated() {
+            return Err(TypeFerryError::MethodForbidden(method.to_string()));
+        }
         m.exec(params, node).await
     }
 }

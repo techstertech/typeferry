@@ -99,10 +99,21 @@ async fn ws_duplicate_origin_size_limit_collision_and_user_index() {
     let _ = attacker_ws
         .send(Message::Text("a".repeat(1024 * 1024 + 1024).into()))
         .await;
-    let next = tokio::time::timeout(Duration::from_secs(2), attacker_ws.next()).await;
-    if let Ok(Some(Ok(Message::Text(_)))) = next {
-        panic!("oversized message should have closed socket");
-    }
+    let next = tokio::time::timeout(Duration::from_secs(2), attacker_ws.next())
+        .await
+        .expect("timed out waiting for close frame after oversized message");
+    assert!(
+        !matches!(next, Some(Ok(Message::Text(_)))),
+        "oversized message should have closed socket"
+    );
 
-    let _ = victim_ws.close(None).await;
+    // 5) Server-initiated socket.close() tears down handle_connection promptly even with open peer
+    victim_node.close().await;
+    let closed_frame = tokio::time::timeout(Duration::from_secs(2), victim_ws.next())
+        .await
+        .expect("server close() did not terminate peer WS promptly");
+    assert!(
+        !matches!(closed_frame, Some(Ok(Message::Text(_)))),
+        "expected victim WS close after node.close()"
+    );
 }

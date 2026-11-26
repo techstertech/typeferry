@@ -36,8 +36,11 @@ pub fn verify_access_token(token: &str, config: &AuthConfig) -> Option<AccessTok
         return None;
     }
     let now = Utc::now().timestamp();
-    let max_age = (config.access_token_expiry_minutes as i64) * 60;
-    if now - claims.iat > max_age || claims.iat > now + 5 {
+    let max_age = (config.access_token_expiry_minutes as i64).saturating_mul(60);
+    if claims.iat < 0
+        || now.saturating_sub(claims.iat) > max_age
+        || claims.iat > now.saturating_add(5)
+    {
         return None;
     }
     Some(claims)
@@ -51,11 +54,13 @@ pub fn decode_token(token: &str) -> Option<AccessTokenPayload> {
 }
 
 fn strip_bearer(token: &str) -> &str {
-    if token
-        .get(..7)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+    if let Some(prefix) = token.get(..6)
+        && prefix.eq_ignore_ascii_case("bearer")
     {
-        return &token[7..];
+        let rest = &token[6..];
+        if rest.starts_with(char::is_whitespace) {
+            return rest.trim_start();
+        }
     }
     token
 }
@@ -104,6 +109,13 @@ mod tests {
     fn bearer_prefix_stripped() {
         let token = sign_access_token(&payload(), &config()).unwrap();
         assert!(verify_access_token(&format!("Bearer {token}"), &config()).is_some());
+        assert!(verify_access_token(&format!("Bearer   {token}"), &config()).is_some());
+        assert!(verify_access_token(&format!("BearerB{token}"), &config()).is_none());
+
+        let mut neg = payload();
+        neg.iat = -10;
+        let neg_tok = sign_access_token(&neg, &config()).unwrap();
+        assert!(verify_access_token(&neg_tok, &config()).is_none());
     }
 
     #[test]

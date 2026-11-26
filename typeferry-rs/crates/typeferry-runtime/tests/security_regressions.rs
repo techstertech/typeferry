@@ -243,6 +243,14 @@ async fn method_cache_post_exec_auth_and_size_bound() {
     );
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 
+    // Failed execution must not poison subsequent calls once failure clears
+    assert!(mid_auth.exec(json!("fail"), anon.clone()).await.is_err());
+    fail.store(false, Ordering::Relaxed);
+    assert_eq!(
+        mid_auth.exec(json!("fail"), anon.clone()).await.unwrap(),
+        json!("fail")
+    );
+
     // Bounded at 1000 entries
     let bounded_calls = Arc::new(AtomicUsize::new(0));
     let bc = bounded_calls.clone();
@@ -302,4 +310,100 @@ async fn set_channel_authorization_gates_rpc_on() {
         .await
         .unwrap();
     assert_eq!(allowed, json!({"chat": true}));
+}
+
+#[tokio::test]
+async fn protected_call_on_node_and_rpc_off_bounds_and_user_index_switch() {
+    let server = Server::new(ServerOptions::default());
+    let rooms = Arc::new(RoomRegistry::new());
+    server.attach_room_registry(rooms);
+    server.add_event_named("chat", EventOptions::default());
+    server.add_method(
+        "secret",
+        Arc::new(|_n, _p| async move { Ok(json!(true)) }.boxed()),
+        MethodOptions {
+            protected: true,
+            ..Default::default()
+        },
+    );
+
+    let anon = ClientNode::new(Some(TestSocket::new(11)));
+    server.add_client(anon.clone());
+    assert!(matches!(
+        server
+            .call_method_on_node("secret", Value::Null, anon.clone())
+            .await,
+        Err(typeferry_runtime::TypeFerryError::MethodForbidden(_))
+    ));
+
+    // rpc:off rejects >256 events and >256 byte / non-string channels
+    let too_many: Vec<Value> = (0..257).map(|i| json!(format!("e-{i}"))).collect();
+    assert_eq!(
+        server
+            .call_method_on_node(methods::RPC_OFF, json!({"events": too_many}), anon.clone())
+            .await
+            .unwrap(),
+        json!({})
+    );
+    assert_eq!(
+        server
+            .call_method_on_node(
+                methods::RPC_OFF,
+                json!({"events": ["chat"], "channel": "a".repeat(257)}),
+                anon.clone(),
+            )
+            .await
+            .unwrap(),
+        json!({})
+    );
+    assert_eq!(
+        server
+            .call_method_on_node(
+                methods::RPC_OFF,
+                json!({"events": ["chat"], "channel": ["bad"]}),
+                anon.clone(),
+            )
+            .await
+            .unwrap(),
+        json!({})
+    );
+
+    // Changing user_id on a registered ClientNode must retire the prior user index entry
+    anon.set_authenticated(true);
+    anon.set_context(json!({"user": {"_id": "u-first"}}));
+    server.refresh_client_user_index(&anon);
+    assert!(
+        server
+            .clients_by_user_id
+            .read()
+            .unwrap()
+            .contains_key("u-first")
+    );
+
+    anon.set_context(json!({"user": {"_id": "u-second"}}));
+    server.refresh_client_user_index(&anon);
+    assert!(
+        !server
+            .clients_by_user_id
+            .read()
+            .unwrap()
+            .contains_key("u-first")
+    );
+    assert!(
+        server
+            .clients_by_user_id
+            .read()
+            .unwrap()
+            .contains_key("u-second")
+    );
+
+    anon.set_authenticated(false);
+    server.refresh_client_user_index(&anon);
+    assert!(
+        !server
+            .clients_by_user_id
+            .read()
+            .unwrap()
+            .contains_key("u-second")
+    );
 }

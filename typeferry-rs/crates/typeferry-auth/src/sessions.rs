@@ -35,8 +35,8 @@ impl InMemorySessionManager {
         let token = Uuid::new_v4().to_string();
         let family_id = Uuid::new_v4().to_string();
         let session_id = Uuid::new_v4().to_string();
-        let expiration =
-            (Utc::now().timestamp() as u64) + self.config.refresh_token_expiry_days * 86400;
+        let expiration = (Utc::now().timestamp() as u64)
+            .saturating_add(self.config.refresh_token_expiry_days.saturating_mul(86400));
 
         let session = Session {
             id: session_id.clone(),
@@ -64,72 +64,93 @@ impl InMemorySessionManager {
         refresh_token: &str,
         device_info: Option<DeviceInfo>,
     ) -> Option<TokenPair> {
-        let mut store = self.store.lock().unwrap();
-        let session = store.sessions.get(refresh_token)?.clone();
-        if session.is_revoked {
-            return None;
-        }
-        let now = Utc::now().timestamp() as u64;
-        if now > session.expiration {
-            return None;
+        enum RefreshPlan {
+            Missing,
+            Pair {
+                token: String,
+                user_id: String,
+                session_id: String,
+            },
         }
 
-        // Reuse / replaced path guarded by monotonic grace tracking.
-        if let Some(replaced) = &session.replaced_by {
-            let grace = Duration::from_secs(self.config.rotation_grace_period_seconds);
-            let within_grace = !grace.is_zero()
-                && store
-                    .grace_started
-                    .get(refresh_token)
-                    .is_some_and(|started| started.elapsed() <= grace);
-            if !within_grace {
-                // Out of grace — revoke family.
-                let family = session.family_id.clone();
-                for s in store.sessions.values_mut() {
-                    if s.family_id == family && !s.is_revoked {
-                        s.is_revoked = true;
+        let plan = {
+            let mut store = self.store.lock().unwrap();
+            let session = store.sessions.get(refresh_token).cloned()?;
+            let now = Utc::now().timestamp().max(0) as u64;
+            if session.is_revoked || now >= session.expiration {
+                RefreshPlan::Missing
+            } else if let Some(replaced) = &session.replaced_by {
+                let grace = Duration::from_secs(self.config.rotation_grace_period_seconds);
+                let within_grace = !grace.is_zero()
+                    && store
+                        .grace_started
+                        .get(refresh_token)
+                        .is_some_and(|started| started.elapsed() <= grace);
+                if !within_grace {
+                    Self::revoke_family_locked(&mut store, &session.family_id);
+                    RefreshPlan::Missing
+                } else {
+                    match store.sessions.get(replaced).cloned() {
+                        Some(replacement)
+                            if !replacement.is_revoked
+                                && replacement.replaced_by.is_none()
+                                && now < replacement.expiration =>
+                        {
+                            RefreshPlan::Pair {
+                                token: replacement.token,
+                                user_id: replacement.user_id,
+                                session_id: replacement.id,
+                            }
+                        }
+                        _ => {
+                            Self::revoke_family_locked(&mut store, &session.family_id);
+                            RefreshPlan::Missing
+                        }
                     }
                 }
-                return None;
+            } else {
+                if store.sessions.len() >= LAZY_PRUNE_THRESHOLD {
+                    Self::prune_locked(&mut store);
+                }
+                let new_token = Uuid::new_v4().to_string();
+                let new_session_id = Uuid::new_v4().to_string();
+                let expiration =
+                    now.saturating_add(self.config.refresh_token_expiry_days.saturating_mul(86400));
+                let new_session = Session {
+                    id: new_session_id.clone(),
+                    user_id: session.user_id.clone(),
+                    family_id: session.family_id.clone(),
+                    token: new_token.clone(),
+                    expiration,
+                    device_info,
+                    is_revoked: false,
+                    replaced_by: None,
+                    used_at: None,
+                };
+                if let Some(existing) = store.sessions.get_mut(refresh_token) {
+                    existing.replaced_by = Some(new_token.clone());
+                    existing.used_at = Some(Utc::now().timestamp_millis().max(0) as u128);
+                }
+                store
+                    .grace_started
+                    .insert(refresh_token.to_string(), Instant::now());
+                store.sessions.insert(new_token.clone(), new_session);
+                RefreshPlan::Pair {
+                    token: new_token,
+                    user_id: session.user_id,
+                    session_id: new_session_id,
+                }
             }
-            let replacement = store.sessions.get(replaced)?.clone();
-            if replacement.is_revoked
-                || replacement.replaced_by.is_some()
-                || now > replacement.expiration
-            {
-                return None;
-            }
-            return Some(self.build_pair(
-                replacement.token.clone(),
-                &replacement.user_id,
-                &replacement.id,
-            ));
-        }
-
-        // Rotate.
-        let new_token = Uuid::new_v4().to_string();
-        let new_session_id = Uuid::new_v4().to_string();
-        let expiration = now + self.config.refresh_token_expiry_days * 86400;
-        let new_session = Session {
-            id: new_session_id.clone(),
-            user_id: session.user_id.clone(),
-            family_id: session.family_id.clone(),
-            token: new_token.clone(),
-            expiration,
-            device_info,
-            is_revoked: false,
-            replaced_by: None,
-            used_at: None,
         };
-        if let Some(existing) = store.sessions.get_mut(refresh_token) {
-            existing.replaced_by = Some(new_token.clone());
-            existing.used_at = Some(Utc::now().timestamp_micros() as u128);
+
+        match plan {
+            RefreshPlan::Missing => None,
+            RefreshPlan::Pair {
+                token,
+                user_id,
+                session_id,
+            } => Some(self.build_pair(token, &user_id, &session_id)),
         }
-        store
-            .grace_started
-            .insert(refresh_token.to_string(), Instant::now());
-        store.sessions.insert(new_token.clone(), new_session);
-        Some(self.build_pair(new_token, &session.user_id, &new_session_id))
     }
 
     pub async fn revoke_session(&self, session_id: &str) -> bool {
@@ -143,8 +164,7 @@ impl InMemorySessionManager {
         false
     }
 
-    pub async fn revoke_family(&self, family_id: &str) -> usize {
-        let mut store = self.store.lock().unwrap();
+    fn revoke_family_locked(store: &mut SessionStore, family_id: &str) -> usize {
         let mut count = 0;
         for s in store.sessions.values_mut() {
             if s.family_id == family_id && !s.is_revoked {
@@ -153,6 +173,11 @@ impl InMemorySessionManager {
             }
         }
         count
+    }
+
+    pub async fn revoke_family(&self, family_id: &str) -> usize {
+        let mut store = self.store.lock().unwrap();
+        Self::revoke_family_locked(&mut store, family_id)
     }
 
     pub async fn get_user_sessions(&self, user_id: &str) -> Vec<Session> {
@@ -202,7 +227,8 @@ impl InMemorySessionManager {
 
     fn build_pair(&self, refresh_token: String, user_id: &str, session_id: &str) -> TokenPair {
         let iat = Utc::now().timestamp();
-        let exp = iat + (self.config.access_token_expiry_minutes as i64) * 60;
+        let exp =
+            iat.saturating_add((self.config.access_token_expiry_minutes as i64).saturating_mul(60));
         let payload = AccessTokenPayload {
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
@@ -271,11 +297,12 @@ mod tests {
         );
 
         let active = m.get_user_sessions("u1").await;
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].token, third.refresh_token);
-
-        assert!(m.revoke_session(&active[0].id).await);
-        assert!(m.get_user_sessions("u1").await.is_empty());
+        assert!(active.is_empty());
+        assert!(
+            m.refresh_session(&third.refresh_token, None)
+                .await
+                .is_none()
+        );
 
         let another = m.create_session("u2", None).await;
         let u2_sessions = m.get_user_sessions("u2").await;
@@ -285,6 +312,6 @@ mod tests {
                 .await
                 .is_none()
         );
-        assert!(m.cleanup() >= 2);
+        assert!(m.cleanup() >= 3);
     }
 }

@@ -180,8 +180,17 @@ async fn handle_connection(server: Arc<Server>, socket: WebSocket, query: Upgrad
         }
     });
 
+    let mut close_rx = adapter.subscribe_close();
     let dyn_socket: Arc<dyn TypeFerrySocket> = adapter.clone();
-    while let Some(Ok(msg)) = stream.next().await {
+    loop {
+        let msg = tokio::select! {
+            biased;
+            _ = close_rx.wait_for(|&closed| closed) => break,
+            next = stream.next() => match next {
+                Some(Ok(msg)) => msg,
+                _ => break,
+            }
+        };
         match msg {
             Message::Text(text) => {
                 dispatch_frame(&server, &node, &dyn_socket, &pong_flag, &text).await;
@@ -333,19 +342,30 @@ pub struct AxumSocket {
     id: u64,
     tx: RwLock<Option<mpsc::Sender<String>>>,
     state: RwLock<u8>,
+    close_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl AxumSocket {
     fn new(mut sink: SplitSink<WebSocket, Message>) -> Arc<Self> {
         let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE_CAP);
+        let (close_tx, mut writer_close_rx) = tokio::sync::watch::channel(false);
         let socket = Arc::new(Self {
             id: SOCKET_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             tx: RwLock::new(Some(tx)),
             state: RwLock::new(typeferry_runtime::SocketState::OPEN),
+            close_tx,
         });
         let writer_socket = Arc::downgrade(&socket);
         tokio::spawn(async move {
-            while let Some(data) = rx.recv().await {
+            loop {
+                let data = tokio::select! {
+                    biased;
+                    _ = writer_close_rx.wait_for(|&closed| closed) => break,
+                    next = rx.recv() => match next {
+                        Some(data) => data,
+                        None => break,
+                    }
+                };
                 let res = tokio::time::timeout(
                     SOCKET_WRITE_TIMEOUT,
                     sink.send(Message::Text(data.into())),
@@ -364,8 +384,13 @@ impl AxumSocket {
         socket
     }
 
+    fn subscribe_close(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.close_tx.subscribe()
+    }
+
     fn mark_closed(&self) {
         *self.state.write().expect("state poisoned") = typeferry_runtime::SocketState::CLOSED;
+        self.close_tx.send_replace(true);
     }
 }
 
