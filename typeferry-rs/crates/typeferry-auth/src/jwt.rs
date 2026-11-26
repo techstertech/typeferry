@@ -1,5 +1,4 @@
 use crate::types::{AccessTokenPayload, AuthConfig};
-use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 
 pub fn sign_access_token(
@@ -35,7 +34,7 @@ pub fn verify_access_token(token: &str, config: &AuthConfig) -> Option<AccessTok
     if claims.user_id.is_empty() || claims.session_id.is_empty() {
         return None;
     }
-    let now = Utc::now().timestamp();
+    let now = crate::now_unix_secs();
     let max_age = (config.access_token_expiry_minutes as i64).saturating_mul(60);
     if claims.iat < 0
         || now.saturating_sub(claims.iat) > max_age
@@ -69,7 +68,6 @@ fn strip_bearer(token: &str) -> &str {
 mod tests {
     use super::*;
     use crate::types::JwtAlgorithm;
-    use chrono::Utc;
     use serde_json::{Value, json};
 
     fn config() -> AuthConfig {
@@ -77,7 +75,7 @@ mod tests {
     }
 
     fn payload() -> AccessTokenPayload {
-        let now = Utc::now().timestamp();
+        let now = crate::now_unix_secs();
         AccessTokenPayload {
             user_id: "u1".into(),
             session_id: "s1".into(),
@@ -143,13 +141,13 @@ mod tests {
 
         let mut expired = payload();
         expired.iat -= 900;
-        expired.exp = Utc::now().timestamp() - 5;
+        expired.exp = crate::now_unix_secs() - 5;
         let expired_tok = sign_access_token(&expired, &config()).unwrap();
         assert!(verify_access_token(&expired_tok, &config()).is_none());
 
         let mut stale = payload();
-        stale.iat = Utc::now().timestamp() - 2000;
-        stale.exp = Utc::now().timestamp() + 2000;
+        stale.iat = crate::now_unix_secs() - 2000;
+        stale.exp = crate::now_unix_secs() + 2000;
         let stale_tok = sign_access_token(&stale, &config()).unwrap();
         assert!(verify_access_token(&stale_tok, &config()).is_none());
 
@@ -162,7 +160,7 @@ mod tests {
     fn expired_token_is_rejected() {
         let mut payload = payload();
         payload.iat -= 900;
-        payload.exp = Utc::now().timestamp() - 120;
+        payload.exp = crate::now_unix_secs() - 120;
 
         let token = sign_access_token(&payload, &config()).unwrap();
 
@@ -201,7 +199,7 @@ mod tests {
     #[test]
     fn decode_without_verification() {
         let mut payload = payload();
-        payload.exp = Utc::now().timestamp() - 120;
+        payload.exp = crate::now_unix_secs() - 120;
 
         let token = sign_access_token(&payload, &config()).unwrap();
         let claims = decode_token(&token).unwrap();

@@ -88,17 +88,17 @@ Use the Redis feature when events must propagate between server instances. Keep 
 ## EJSON dates and ordering
 
 `EjsonValue::Date` now contains `EjsonDate`, rather than `chrono::DateTime<Utc>`.
-Migrate an existing constructor from `EjsonValue::Date(date_time)` to
-`EjsonValue::Date(date_time.into())`. Match arms now receive an `EjsonDate`.
+Migrate an existing constructor from `EjsonValue::Date(system_time)` to
+`EjsonValue::Date(system_time.into())`. Match arms now receive an `EjsonDate`.
 
 `EjsonDate::from_millis` preserves the complete JavaScript range, including
 `-8640000000000000` and `8640000000000000`. Its `timestamp_millis()` returns
 `Some(milliseconds)` for valid dates and `None` for invalid dates. Out-of-range
 inputs produce an invalid date, not an epoch fallback.
 
-Use `EjsonDate::to_chrono()` for checked conversion. It returns `None` for an
-invalid date or a valid JavaScript date outside chrono's smaller range.
-`EjsonDate::from(date_time)` converts an existing UTC chrono value.
+Use `EjsonDate::to_system_time()` for checked conversion. It returns `None` for
+an invalid date or a JavaScript date outside `std::time::SystemTime` range.
+`EjsonDate::from(system_time)` converts an existing `SystemTime` value.
 
 Invalid dates encode as `{"$date":null}`, matching TypeScript. Decoding that
 representation produces epoch zero because the existing TypeScript converter

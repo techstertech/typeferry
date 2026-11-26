@@ -1,6 +1,5 @@
 use crate::jwt::sign_access_token;
 use crate::types::{AccessTokenPayload, AuthConfig, DeviceInfo, Session, TokenPair};
-use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -35,7 +34,7 @@ impl InMemorySessionManager {
         let token = Uuid::new_v4().to_string();
         let family_id = Uuid::new_v4().to_string();
         let session_id = Uuid::new_v4().to_string();
-        let expiration = (Utc::now().timestamp() as u64)
+        let expiration = (crate::now_unix_secs().max(0) as u64)
             .saturating_add(self.config.refresh_token_expiry_days.saturating_mul(86400));
 
         let session = Session {
@@ -76,7 +75,7 @@ impl InMemorySessionManager {
         let plan = {
             let mut store = self.store.lock().unwrap();
             let session = store.sessions.get(refresh_token).cloned()?;
-            let now = Utc::now().timestamp().max(0) as u64;
+            let now = crate::now_unix_secs().max(0) as u64;
             if session.is_revoked || now >= session.expiration {
                 RefreshPlan::Missing
             } else if let Some(replaced) = &session.replaced_by {
@@ -129,7 +128,7 @@ impl InMemorySessionManager {
                 };
                 if let Some(existing) = store.sessions.get_mut(refresh_token) {
                     existing.replaced_by = Some(new_token.clone());
-                    existing.used_at = Some(Utc::now().timestamp_millis().max(0) as u128);
+                    existing.used_at = Some(crate::now_unix_millis());
                 }
                 store
                     .grace_started
@@ -182,7 +181,7 @@ impl InMemorySessionManager {
 
     pub async fn get_user_sessions(&self, user_id: &str) -> Vec<Session> {
         let store = self.store.lock().unwrap();
-        let now = Utc::now().timestamp() as u64;
+        let now = crate::now_unix_secs().max(0) as u64;
         store
             .sessions
             .values()
@@ -202,7 +201,7 @@ impl InMemorySessionManager {
     }
 
     fn prune_locked(store: &mut SessionStore) -> usize {
-        let now = Utc::now().timestamp() as u64;
+        let now = crate::now_unix_secs().max(0) as u64;
         let before = store.sessions.len();
         store
             .sessions
@@ -226,7 +225,7 @@ impl InMemorySessionManager {
     }
 
     fn build_pair(&self, refresh_token: String, user_id: &str, session_id: &str) -> TokenPair {
-        let iat = Utc::now().timestamp();
+        let iat = crate::now_unix_secs();
         let exp =
             iat.saturating_add((self.config.access_token_expiry_minutes as i64).saturating_mul(60));
         let payload = AccessTokenPayload {

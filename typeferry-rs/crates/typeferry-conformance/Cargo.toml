@@ -14,7 +14,6 @@ typeferry-http = { workspace = true }
 typeferry-ws = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 

@@ -6,7 +6,7 @@ use super::*;
 use crate::base64::{decode, encode};
 use crate::value::EjsonMap as BTreeMap;
 use crate::value::{EjsonValue, InfNaNSign};
-use chrono::{TimeZone, Utc};
+use std::time::{Duration, UNIX_EPOCH};
 
 #[test]
 fn base64_round_trip_matches_mime_alphabet() {
@@ -42,7 +42,7 @@ fn base64_rejects_bad_inputs() {
 
 #[test]
 fn date_round_trips_through_json() {
-    let dt = Utc.with_ymd_and_hms(2024, 6, 1, 12, 30, 45).unwrap();
+    let dt = UNIX_EPOCH + Duration::from_millis(1_717_245_045_000);
     let encoded = Presentation::encode(&EjsonValue::Date(dt.into()));
     let decoded = Presentation::decode(&encoded).unwrap();
     assert_eq!(decoded, EjsonValue::Date(dt.into()));
@@ -95,19 +95,60 @@ fn invalid_dates_follow_javascript_encoding_without_panicking() {
 }
 
 #[test]
-fn date_api_converts_to_chrono_only_when_representable() {
-    let ordinary = Utc.with_ymd_and_hms(2024, 6, 1, 12, 30, 45).unwrap();
+fn date_api_converts_to_and_from_system_time() {
+    let ordinary = UNIX_EPOCH + Duration::from_millis(1_717_245_045_000);
     let date = EjsonDate::from(ordinary);
 
-    assert_eq!(date.to_chrono(), Some(ordinary));
-    assert_eq!(date.timestamp_millis(), Some(ordinary.timestamp_millis()));
+    assert_eq!(date.to_system_time(), Some(ordinary));
+    assert_eq!(date.timestamp_millis(), Some(1_717_245_045_000));
+
+    let before_epoch = UNIX_EPOCH - Duration::from_millis(500);
+    let before_date = EjsonDate::from(before_epoch);
+
+    assert_eq!(before_date.timestamp_millis(), Some(-500));
+    assert_eq!(before_date.to_system_time(), Some(before_epoch));
+
+    // Sub-millisecond pre-epoch timestamps floor toward negative infinity.
+    assert_eq!(
+        EjsonDate::from(UNIX_EPOCH - Duration::from_nanos(1)).timestamp_millis(),
+        Some(-1)
+    );
+    assert_eq!(
+        EjsonDate::from(UNIX_EPOCH - Duration::from_nanos(1_000_001)).timestamp_millis(),
+        Some(-2)
+    );
+    assert_eq!(
+        EjsonDate::from(UNIX_EPOCH + Duration::from_nanos(1_999_999)).timestamp_millis(),
+        Some(1)
+    );
+
     for millis in [-EjsonDate::MAX_MILLIS, EjsonDate::MAX_MILLIS] {
         let boundary = EjsonDate::from_millis(millis);
 
         assert_eq!(boundary.timestamp_millis(), Some(millis));
-        assert!(boundary.to_chrono().is_none());
+        if let Some(system_time) = boundary.to_system_time() {
+            assert_eq!(EjsonDate::from(system_time), boundary);
+        }
     }
-    assert!(EjsonDate::from_millis(i64::MAX).to_chrono().is_none());
+
+    if let Some(after_max) =
+        UNIX_EPOCH.checked_add(Duration::from_millis(EjsonDate::MAX_MILLIS as u64 + 1))
+    {
+        let invalid = EjsonDate::from(after_max);
+
+        assert!(invalid.timestamp_millis().is_none());
+        assert!(invalid.to_system_time().is_none());
+    }
+    if let Some(before_min) =
+        UNIX_EPOCH.checked_sub(Duration::from_millis(EjsonDate::MAX_MILLIS as u64 + 1))
+    {
+        let invalid = EjsonDate::from(before_min);
+
+        assert!(invalid.timestamp_millis().is_none());
+        assert!(invalid.to_system_time().is_none());
+    }
+
+    assert!(EjsonDate::from_millis(i64::MAX).to_system_time().is_none());
     assert!(
         EjsonDate::from_millis(i64::MAX)
             .timestamp_millis()
@@ -270,10 +311,7 @@ fn custom_type_round_trip() {
 #[test]
 fn nested_containers_recurse() {
     let mut inner = BTreeMap::new();
-    inner.insert(
-        "at".to_string(),
-        EjsonValue::Date(Utc.timestamp_opt(0, 0).unwrap().into()),
-    );
+    inner.insert("at".to_string(), EjsonValue::Date(UNIX_EPOCH.into()));
     inner.insert("blob".to_string(), EjsonValue::Binary(vec![1, 2, 3]));
 
     let mut outer = BTreeMap::new();

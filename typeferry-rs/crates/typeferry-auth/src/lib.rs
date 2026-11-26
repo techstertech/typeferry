@@ -15,3 +15,19 @@ pub use types::{
     AccessTokenPayload, AuthConfig, AuthContext, CookieOptions, DeviceInfo, JwtAlgorithm, Session,
     TokenPair,
 };
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(crate) fn now_unix_secs() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+        Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
+    }
+}
+
+pub(crate) fn now_unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
