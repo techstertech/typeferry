@@ -604,3 +604,218 @@ async def test_python_post_review_hardening_regressions() -> None:
     cn.authenticated = True
     cn.set_context({"user": {"_id": {"nested": 1}}})
     assert cn.user_id is None
+
+
+@pytest.mark.asyncio
+async def test_p2_security_hardening_and_parity(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from typeferry.server.server import AuthSetup
+    from typeferry.server.transports.redis import (
+        RedisTransport,
+        build_redis_envelope,
+        format_redis_signing_input,
+        parse_redis_envelope,
+    )
+    from typeferry.server.transports.ws_shared import WebSocketHandshake
+
+    # 1) Production omitted-origins warning on HTTP & WS
+    monkeypatch.setenv("TYPEFERRY_ENV", "production")
+    caplog.set_level(logging.WARNING)
+    warn_srv = Server(ServerOptions())
+    HttpTransport(warn_srv)
+    WebSocketTransport(warn_srv)
+    assert caplog.text.count("without an origins allowlist in production") >= 2
+    monkeypatch.delenv("TYPEFERRY_ENV", raising=False)
+
+    # 2) HTTP auth timeout fails closed
+    slow_srv = Server(ServerOptions())
+
+    async def slow_auth(_node: ClientNode, _ctx: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.sleep(0.25)
+        return {"user": {"_id": "late"}}
+
+    slow_srv.set_auth(AuthSetup(auth=slow_auth, log_in=lambda _n, _p: True))
+    slow_srv.add_method("secret", lambda _n, _p: "ok", MethodOptions(protected=True))
+    http_t = HttpTransport(slow_srv, auth_timeout_ms=40)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=http_t.app), base_url="http://testserver"
+    ) as client:
+        res = await client.post(
+            "/__h",
+            headers={"x-api-key": "slow"},
+            content=json.dumps({"payload": {"method": "secret"}}),
+        )
+        assert res.json()["message"] == Errors.METHOD_FORBIDDEN.value
+
+    # 3) WS allow_query_token=False blocks ?token= while handshake_authenticator still works
+    ws_srv = Server(ServerOptions())
+    ws_srv.set_auth(
+        AuthSetup(
+            auth=lambda _n, ctx: {"user": {"_id": "q"}} if ctx.get("token") == "secret" else False,
+            log_in=lambda _n, _p: True,
+        )
+    )
+    ws_t = WebSocketTransport(ws_srv, allow_query_token=False)
+    ws_srv.websocket_transport = ws_t
+    with (
+        TestClient(Starlette(routes=ws_t.routes())) as tc,
+        tc.websocket_connect(f"{TYPEFERRY_WS_PATH}?token=secret") as ws,
+    ):
+        assert ws.receive_json() == {"t": "auth", "authenticated": False}
+
+    def cookie_auth(_node: ClientNode, hs: WebSocketHandshake) -> Any:
+        return {"user": {"_id": "c1"}} if hs.headers.get("cookie") == "sid=ok" else False
+
+    ws_t_hs = WebSocketTransport(
+        ws_srv, handshake_authenticator=cookie_auth, allow_query_token=False
+    )
+    with (
+        TestClient(Starlette(routes=ws_t_hs.routes())) as tc,
+        tc.websocket_connect(
+            f"{TYPEFERRY_WS_PATH}?token=secret", headers={"cookie": "sid=ok"}
+        ) as ws,
+    ):
+        assert ws.receive_json() == {"t": "auth", "authenticated": True}
+
+    # 4) revalidate_on_delivery re-checks auth/predicate and evicts revoked subscriber
+    rev_srv = Server(ServerOptions())
+    allow_flag = True
+    ev_ws_t = WebSocketTransport(rev_srv)
+    rev_srv.websocket_transport = ev_ws_t
+    rev_srv.add_event(
+        "live.feed",
+        EventOptions(
+            protected=True,
+            revalidate_on_delivery=True,
+            should_subscribe=lambda c, _e, _ch: allow_flag and c.authenticated,
+        ),
+    )
+
+    class MemSocket:
+        def __init__(self) -> None:
+            self.readyState = SocketState.OPEN
+            self.sent: list[str] = []
+
+        def send(self, data: str) -> None:
+            self.sent.append(data)
+
+        def close(self) -> None:
+            self.readyState = SocketState.CLOSED
+
+    s_ok = MemSocket()
+    n_ok = ClientNode(rev_srv, socket=s_ok)
+    n_ok.authenticated = True
+    rev_srv.add_ws_client(n_ok)
+    await rev_srv.call_method_on_node(
+        "rpc:on", {"events": ["live.feed"], "channel": "room-1"}, n_ok
+    )
+    await rev_srv.channel("room-1").emit("live.feed", {"n": 1})
+    assert len(s_ok.sent) == 1
+
+    allow_flag = False
+    await rev_srv.channel("room-1").emit("live.feed", {"n": 2})
+    assert len(s_ok.sent) == 1
+    assert ev_ws_t.rooms.get_room_size("typeferry:6:room-1:live.feed") == 0
+
+    # 5) MethodOptions(sensitive=True) redacts telemetry on execution & errors
+    sens_srv = Server(ServerOptions())
+    executions: list[dict[str, Any]] = []
+    errors_seen: list[dict[str, Any]] = []
+    sens_srv.on_server_event(ServerEvents.METHOD_EXECUTION, executions.append)
+    sens_srv.on_server_event(ServerEvents.METHOD_ERROR, errors_seen.append)
+    sens_srv.add_method(
+        "login.secret",
+        lambda _n, _p: {"token": "jwt-secret"},
+        MethodOptions(sensitive=True),
+    )
+
+    def fail_secret(_n: ClientNode, _p: Any) -> Any:
+        raise RuntimeError("db-password-leak")
+
+    sens_srv.add_method("fail.secret", fail_secret, MethodOptions(sensitive=True))
+    sens_ws_t = WebSocketTransport(sens_srv)
+    sens_srv.websocket_transport = sens_ws_t
+    await sens_srv.call("login.secret", {"password": "hunter2"})
+    assert executions[-1]["params"] == "[REDACTED]"
+    assert executions[-1]["result"] == "[REDACTED]"
+
+    caplog.clear()
+    with (
+        TestClient(Starlette(routes=sens_ws_t.routes())) as tc,
+        tc.websocket_connect(TYPEFERRY_WS_PATH) as ws,
+    ):
+        assert ws.receive_json() == {"t": "auth", "authenticated": False}
+        ws.send_text(
+            json.dumps(
+                {"t": "rpc", "id": "s1", "method": "fail.secret", "params": {"pw": "s"}}
+            )
+        )
+        assert ws.receive_json()["error"] == Errors.INTERNAL_ERROR.value
+        ws.send_text(
+            json.dumps(
+                {"t": "rpc:void", "method": "fail.secret", "params": {"pw": "v"}}
+            )
+        )
+    assert len(errors_seen) >= 2
+    for ev in errors_seen[-2:]:
+        assert ev["params"] == "[REDACTED]"
+        assert ev["error"] == "[REDACTED]"
+    assert "db-password-leak" not in caplog.text
+
+    # 6) Redis HMAC-SHA256 signing & strict field validation
+    assert (
+        format_redis_signing_input("chat.message", "room-a", '{"t":"event"}', "orig-1")
+        == '12:chat.message|6:room-a|13:{"t":"event"}|6:orig-1'
+    )
+    signed = build_redis_envelope(
+        "chat.message", "room-a", '{"t":"event"}', "orig-1", signing_secret="test-secret"
+    )
+    assert (
+        json.loads(signed)["sig"]
+        == "2fe864725cc91a1de99652933920ffbd5bd716753b3b4a155584e49ea0d4fed0"
+    )
+    assert parse_redis_envelope(signed, signing_secret="test-secret") == (
+        "chat.message",
+        "room-a",
+        '{"t":"event"}',
+        "orig-1",
+    )
+    assert (
+        parse_redis_envelope(
+            signed.replace("chat.message", "chat.bad"), signing_secret="test-secret"
+        )
+        is None
+    )
+    assert (
+        parse_redis_envelope(
+            json.dumps({"event": "chat.message", "channel": "room-a", "message": "{}"}),
+            signing_secret="test-secret",
+        )
+        is None
+    )
+    assert (
+        parse_redis_envelope(
+            json.dumps(
+                {
+                    "event": "chat.message",
+                    "channel": "room-a",
+                    "message": "{}",
+                    "excludeUuid": 99,
+                }
+            )
+        )
+        is None
+    )
+    rt_signed = RedisTransport(rev_srv, signing_secret="test-secret")
+
+    class TamperedFeed:
+        async def listen(self) -> Any:
+            yield {
+                "type": "message",
+                "data": json.dumps({"event": "live.feed", "channel": "room-1", "message": "{}"}),
+            }
+
+    await rt_signed._listen(TamperedFeed())

@@ -44,6 +44,9 @@ class EventOptions:
     exclude_originator: bool = False
     """When True, uses ``params['uuid']`` to identify and skip the originator."""
 
+    revalidate_on_delivery: bool = False
+    """Recheck auth, channel access, and should_subscribe before each delivery."""
+
 
 async def _always_true(_client: Any, _event: str, _channel: str) -> bool:
     return True
@@ -66,6 +69,7 @@ class Event:
     is_protected: bool
     cluster: bool
     exclude_originator: bool
+    revalidate_on_delivery: bool
     should_subscribe: ShouldSubscribe
 
     def __init__(
@@ -93,6 +97,7 @@ class Event:
 
         self.cluster = bool(opts.cluster)
         self.exclude_originator = bool(opts.exclude_originator)
+        self.revalidate_on_delivery = bool(opts.revalidate_on_delivery)
 
     async def handler(
         self, channel: ServerChannel, params: Any

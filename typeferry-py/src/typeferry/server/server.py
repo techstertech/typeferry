@@ -24,6 +24,7 @@ from typeferry.server.default_methods import build_default_methods
 from typeferry.server.event import Event, EventOptions
 from typeferry.server.method import Method, MethodFunction, MethodOptions
 from typeferry.server.server_channel import ServerChannel
+from typeferry.server.socket import TypeFerrySocket
 
 if TYPE_CHECKING:
     pass
@@ -96,6 +97,7 @@ class Server(ServerChannel):
 
         self.methods = {}
         self.all_clients = {}
+        self._clients_by_socket: dict[int, ClientNode] = {}
         self._clients_by_user_id: dict[str, set[ClientNode]] = {}
         self.channels = {}
         self.events = {}
@@ -219,6 +221,8 @@ class Server(ServerChannel):
 
     def add_client(self, node: ClientNode) -> None:
         self.all_clients[node.uuid] = node
+        if node.socket is not None:
+            self._clients_by_socket[id(node.socket)] = node
 
     def add_ws_client(self, node: ClientNode) -> None:
         """Register a WS handshake node, assigning a fresh UUID on active collision."""
@@ -226,10 +230,19 @@ class Server(ServerChannel):
         while node.uuid in self.all_clients and self.all_clients[node.uuid] is not node:
             node.set_id(Presentation.uuid())
         self.all_clients[node.uuid] = node
+        if node.socket is not None:
+            self._clients_by_socket[id(node.socket)] = node
+
+    def get_client_by_socket(self, socket: TypeFerrySocket) -> ClientNode | None:
+        """Resolve the ClientNode currently bound to ``socket`` in O(1)."""
+
+        return self._clients_by_socket.get(id(socket))
 
     def delete_client(self, node: ClientNode) -> None:
         if self.all_clients.get(node.uuid) is node:
             self.all_clients.pop(node.uuid, None)
+        if node.socket is not None and self._clients_by_socket.get(id(node.socket)) is node:
+            self._clients_by_socket.pop(id(node.socket), None)
         self._remove_client_from_user_index(node)
         if node.socket is not None and self.websocket_transport is not None:
             self.websocket_transport.rooms.leave_all(node.socket)

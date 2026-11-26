@@ -17,10 +17,12 @@ interceptor that routes every emit through the registered event's
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from typeferry.server.event import Event, EventOptions
 from typeferry.server.room_name import get_room_name
+from typeferry.server.socket import TypeFerrySocket
 
 if TYPE_CHECKING:
     from typeferry.server.client_node import ClientNode
@@ -62,7 +64,8 @@ class ServerChannel:
         built by :meth:`typeferry.server.event.Event.handler`.
         """
 
-        if self.server.events.get(event) is None:
+        event_obj = self.server.events.get(event)
+        if event_obj is None:
             return
 
         transport = self.server.websocket_transport
@@ -77,6 +80,40 @@ class ServerChannel:
             node = self.server.all_clients.get(exclude_uuid)
             if node is not None:
                 exclude_socket = node.socket
+
+        if event_obj.revalidate_on_delivery:
+            async def _authorize(ws: TypeFerrySocket) -> bool:
+                client = self.server.get_client_by_socket(ws)
+                if client is None or (event_obj.is_protected and not client.authenticated):
+                    return False
+
+                user_id = client.user_id
+                channel_result = self.server.should_allow_channel_subscribe(
+                    client, self.channel_name
+                )
+                channel_allowed = (
+                    await channel_result
+                    if inspect.isawaitable(channel_result)
+                    else channel_result
+                )
+                if not channel_allowed:
+                    return False
+
+                if not await event_obj.evaluate_should_subscribe(
+                    client, event, self.channel_name
+                ):
+                    return False
+
+                return (
+                    self.server.events.get(event) is event_obj
+                    and client.user_id == user_id
+                    and (not event_obj.is_protected or client.authenticated)
+                )
+
+            await rooms.broadcast_authorized(
+                room_name, payload, _authorize, exclude_socket
+            )
+            return
 
         awaitables = [a for a in rooms.broadcast(room_name, payload, exclude_socket) if a is not None]
         if awaitables:

@@ -29,7 +29,10 @@ from typeferry.protocol.constants import TYPEFERRY_WS_PATH, ServerEvents
 from typeferry.server.client_node import ClientNode
 from typeferry.server.room_registry import RoomRegistry
 from typeferry.server.socket import SocketState
-from typeferry.server.transports._origins import origin_allowed
+from typeferry.server.transports._origins import (
+    origin_allowed,
+    warn_if_origins_omitted_in_production,
+)
 from typeferry.server.transports.rate_limit import RateLimit, SlidingWindowLimiter
 from typeferry.server.transports.ws_shared import (
     PING_INTERVAL_MS,
@@ -116,6 +119,7 @@ class WebSocketTransport:
         allow_originless: bool = False,
         max_message_bytes: int = DEFAULT_MAX_WS_MESSAGE_BYTES,
         rate_limit: RateLimit | bool | None = True,
+        allow_query_token: bool = True,
     ) -> None:
         if (
             isinstance(max_message_bytes, bool)
@@ -123,12 +127,14 @@ class WebSocketTransport:
             or max_message_bytes <= 0
         ):
             raise ValueError("max_message_bytes must be a positive integer")
+        warn_if_origins_omitted_in_production("WebSocket", origins)
         self.server = server
         self.rooms = RoomRegistry()
         self.path = path
         self.origins = None if origins is None else set(origins)
         self.allow_originless = allow_originless
         self.max_message_bytes = max_message_bytes
+        self.allow_query_token = bool(allow_query_token)
         if rate_limit is True:
             self.rate_limit: RateLimit | None = RateLimit()
         elif isinstance(rate_limit, RateLimit):
@@ -165,7 +171,7 @@ class WebSocketTransport:
             return
 
         uuid = validate_uuid(ws.query_params.get("uuid"))
-        token = ws.query_params.get("token")
+        token = ws.query_params.get("token") if self.allow_query_token else None
         meta = parse_meta(ws.query_params.get("meta"))
 
         await ws.accept()

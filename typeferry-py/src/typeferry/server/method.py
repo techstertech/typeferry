@@ -33,6 +33,7 @@ Middleware = Callable[..., Any]
 
 DEFAULT_MAX_AGE_MS = 60_000
 DEFAULT_MAX_CACHE_ENTRIES = 1000
+REDACTED_METHOD_TELEMETRY = "[REDACTED]"
 
 
 @dataclass(slots=True)
@@ -42,6 +43,13 @@ class MethodOptions:
     protected: bool = False
     middleware: list[Middleware] = field(default_factory=list)
     schema: SchemaValidator | None = None
+    sensitive: bool = False
+
+
+def redact_method_telemetry(method: Method, value: Any) -> Any:
+    """Return ``[REDACTED]`` when telemetry sensitivity is enabled on ``method``."""
+
+    return REDACTED_METHOD_TELEMETRY if method.is_sensitive else value
 
 
 async def _call_possibly_async(fn: Callable[..., Any], *args: Any) -> Any:
@@ -72,6 +80,7 @@ class Method:
     server: Server
     fn: MethodFunction
     is_protected: bool
+    is_sensitive: bool
     middleware: list[Middleware]
     schema: SchemaValidator | None
 
@@ -87,6 +96,7 @@ class Method:
         self.name = name
         self.server = server
         self.is_protected = bool(opts.protected)
+        self.is_sensitive = bool(opts.sensitive)
         self.middleware = list(opts.middleware)
         self.schema = opts.schema
 
@@ -136,8 +146,8 @@ class Method:
             {
                 "method": self.name,
                 "time": elapsed_ms,
-                "params": clean_params,
-                "result": returned,
+                "params": redact_method_telemetry(self, clean_params),
+                "result": redact_method_telemetry(self, returned),
             },
         )
 

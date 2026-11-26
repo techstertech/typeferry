@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
@@ -39,18 +41,126 @@ _log = logging.getLogger(__name__)
 _REDIS_URL_DEFAULT = "redis://localhost:6379"
 
 
+def format_redis_signing_input(
+    event: str, channel: str, message: str, exclude_uuid: str | None = None
+) -> str:
+    """Format canonical length-prefixed UTF-8 byte-length input (PROTOCOL.md §2.3)."""
+
+    norm_channel = channel or NO_CHANNEL
+    norm_exclude = exclude_uuid or ""
+    parts = (event, norm_channel, message, norm_exclude)
+    return "|".join(f"{len(part.encode('utf-8'))}:{part}" for part in parts)
+
+
+def sign_redis_envelope(
+    event: str,
+    channel: str,
+    message: str,
+    exclude_uuid: str | None,
+    signing_secret: str,
+) -> str:
+    """Return lowercase hex HMAC-SHA256 for the normalized Redis envelope."""
+
+    signing_input = format_redis_signing_input(event, channel, message, exclude_uuid)
+    return hmac.new(
+        signing_secret.encode("utf-8"),
+        signing_input.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def build_redis_envelope(
+    event: str,
+    channel: str,
+    message: str,
+    exclude_uuid: str | None = None,
+    *,
+    signing_secret: str | None = None,
+) -> str:
+    """Encode an EJSON Redis publish frame, attaching ``sig`` when signed."""
+
+    norm_channel = channel or NO_CHANNEL
+    payload: dict[str, Any] = {
+        "event": event,
+        "channel": norm_channel,
+        "message": message,
+    }
+    if exclude_uuid is not None:
+        payload["excludeUuid"] = exclude_uuid
+    if signing_secret:
+        payload["sig"] = sign_redis_envelope(
+            event, norm_channel, message, exclude_uuid, signing_secret
+        )
+    return Presentation.encode(payload)
+
+
+def parse_redis_envelope(
+    raw: str, *, signing_secret: str | None = None
+) -> tuple[str, str, str, str | None] | None:
+    """Strictly validate an inbound Redis frame and verify HMAC ``sig`` when configured."""
+
+    try:
+        decoded = Presentation.decode(raw)
+    except Exception:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+
+    event = decoded.get("event")
+    raw_channel = decoded.get("channel")
+    message = decoded.get("message")
+    raw_exclude = decoded.get("excludeUuid")
+
+    if not isinstance(event, str) or not event or not isinstance(message, str) or not message:
+        return None
+
+    if raw_channel is None:
+        channel = NO_CHANNEL
+    elif isinstance(raw_channel, str):
+        channel = raw_channel or NO_CHANNEL
+    else:
+        return None
+
+    if raw_exclude is None:
+        exclude_uuid: str | None = None
+    elif isinstance(raw_exclude, str):
+        exclude_uuid = raw_exclude
+    else:
+        return None
+
+    if signing_secret:
+        raw_sig = decoded.get("sig")
+        if not isinstance(raw_sig, str):
+            return None
+        expected_sig = sign_redis_envelope(
+            event, channel, message, exclude_uuid, signing_secret
+        )
+        if not hmac.compare_digest(raw_sig, expected_sig):
+            return None
+
+    return event, channel, message, exclude_uuid
+
+
 class RedisTransport:
     """Redis pub/sub transport that mirrors the TS runtime byte-for-byte."""
 
     server: Server
     url: str
+    signing_secret: str | None
     _pub: aioredis.Redis | None
     _sub: aioredis.Redis | None
     _listener_task: asyncio.Task[None] | None
 
-    def __init__(self, server: Server, url: str | None = None) -> None:
+    def __init__(
+        self,
+        server: Server,
+        url: str | None = None,
+        *,
+        signing_secret: str | None = None,
+    ) -> None:
         self.server = server
         self.url = url or _REDIS_URL_DEFAULT
+        self.signing_secret = signing_secret or None
         self._pub = None
         self._sub = None
         self._listener_task = None
@@ -115,17 +225,10 @@ class RedisTransport:
         if self._pub is None:
             return
 
-        payload: dict[str, Any] = {
-            "event": event,
-            "channel": channel or NO_CHANNEL,
-            "message": message,
-        }
-        if exclude_uuid is not None:
-            payload["excludeUuid"] = exclude_uuid
-
-        await self._pub.publish(
-            RedisListeners.EVENTS.value, Presentation.encode(payload)
+        encoded = build_redis_envelope(
+            event, channel, message, exclude_uuid, signing_secret=self.signing_secret
         )
+        await self._pub.publish(RedisListeners.EVENTS.value, encoded)
 
     # ------------------------------------------------------------------
     # Stats
@@ -174,26 +277,13 @@ class RedisTransport:
                 continue
             try:
                 text = data if isinstance(data, str) else data.decode("utf-8")
-                decoded = Presentation.decode(text)
             except Exception:
                 _log.exception("Malformed TypeFerry Redis message")
                 continue
-            if not isinstance(decoded, dict):
+            parsed = parse_redis_envelope(text, signing_secret=self.signing_secret)
+            if parsed is None:
                 continue
-            event = decoded.get("event")
-            raw_channel = decoded.get("channel")
-            message = decoded.get("message")
-            exclude_uuid = decoded.get("excludeUuid")
-
-            if raw_channel is None:
-                channel = NO_CHANNEL
-            elif isinstance(raw_channel, str):
-                channel = raw_channel or NO_CHANNEL
-            else:
-                continue
-
-            if not isinstance(event, str) or not isinstance(message, str):
-                continue
+            event, channel, message, exclude_uuid = parsed
 
             target = self.server.lookup_channel(channel)
             if target is None:
@@ -208,7 +298,7 @@ class RedisTransport:
                 await target.propagate(
                     event,
                     message,
-                    exclude_uuid if isinstance(exclude_uuid, str) else None,
+                    exclude_uuid,
                 )
             except Exception:
                 _log.exception("Failed propagating Redis event %s", event)

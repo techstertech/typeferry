@@ -21,6 +21,7 @@ from typeferry.ejson.presentation import Presentation
 from typeferry.protocol.constants import ServerEvents
 from typeferry.protocol.messages import MessageType
 from typeferry.server._authentication import authentication_succeeded
+from typeferry.server.method import redact_method_telemetry
 from typeferry.server.socket import SocketState
 from typeferry.utils.errors import Errors, PublicError, SchemaValidationError
 
@@ -87,15 +88,28 @@ async def handle_rpc(
     except SchemaValidationError as err:
         server.emit_server_event(
             ServerEvents.METHOD_ERROR,
-            {"error": err, "method": method, "params": params, "user_id": node.user_id},
+            {
+                "error": redact_method_telemetry(method_instance, err),
+                "method": method,
+                "params": redact_method_telemetry(method_instance, params),
+                "user_id": node.user_id,
+            },
         )
         await send_response(node, rpc_id, error=err.message, errors=err.errors)
         return
     except Exception as err:
-        _log.exception("TypeFerry RPC method %s raised", method)
+        if method_instance.is_sensitive:
+            _log.error("TypeFerry sensitive RPC method %s raised", method)
+        else:
+            _log.exception("TypeFerry RPC method %s raised", method)
         server.emit_server_event(
             ServerEvents.METHOD_ERROR,
-            {"error": err, "method": method, "params": params, "user_id": node.user_id},
+            {
+                "error": redact_method_telemetry(method_instance, err),
+                "method": method,
+                "params": redact_method_telemetry(method_instance, params),
+                "user_id": node.user_id,
+            },
         )
         await send_response(node, rpc_id, error=Errors.INTERNAL_ERROR.value)
         return
@@ -122,10 +136,18 @@ async def handle_rpc_void(
     try:
         await method_instance.exec(params, node)
     except Exception as err:
-        _log.exception("TypeFerry void method %s raised", method)
+        if method_instance.is_sensitive:
+            _log.error("TypeFerry sensitive void method %s raised", method)
+        else:
+            _log.exception("TypeFerry void method %s raised", method)
         server.emit_server_event(
             ServerEvents.METHOD_ERROR,
-            {"error": err, "method": method, "params": params, "user_id": node.user_id},
+            {
+                "error": redact_method_telemetry(method_instance, err),
+                "method": method,
+                "params": redact_method_telemetry(method_instance, params),
+                "user_id": node.user_id,
+            },
         )
 
 

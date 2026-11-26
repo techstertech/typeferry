@@ -21,7 +21,9 @@ path or combine it with other Starlette routes via
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -37,12 +39,18 @@ from typeferry.protocol.constants import (
     CLIENT_ID_HEADER_KEY,
     HTTP_ENDPOINT_PATH,
     TOKEN_HEADER_KEY,
+    ServerEvents,
 )
 from typeferry.protocol.messages import PayloadType
 from typeferry.server._authentication import authentication_succeeded
 from typeferry.server.client_node import ClientNode
-from typeferry.server.transports._origins import origin_allowed
+from typeferry.server.method import redact_method_telemetry
+from typeferry.server.transports._origins import (
+    origin_allowed,
+    warn_if_origins_omitted_in_production,
+)
 from typeferry.server.transports.rate_limit import RateLimit, SlidingWindowLimiter
+from typeferry.server.transports.ws_shared import AUTH_TIMEOUT_MS
 from typeferry.utils.errors import Errors, PublicError, SchemaValidationError
 
 if TYPE_CHECKING:
@@ -51,6 +59,12 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 _VALID_CLIENT_ID = re.compile(r"\A[a-zA-Z0-9-]{1,64}\Z")
+_log = logging.getLogger(__name__)
+
+
+def _discard_auth_error(task: asyncio.Task[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
 
 
 class HttpTransport:
@@ -72,6 +86,7 @@ class HttpTransport:
     rate_limit: RateLimit | None
     limiter: SlidingWindowLimiter | None
     max_body_bytes: int
+    auth_timeout_ms: int
 
     def __init__(
         self,
@@ -81,6 +96,7 @@ class HttpTransport:
         *,
         allow_originless: bool = False,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        auth_timeout_ms: int = AUTH_TIMEOUT_MS,
     ) -> None:
         if (
             isinstance(max_body_bytes, bool)
@@ -88,11 +104,20 @@ class HttpTransport:
             or max_body_bytes <= 0
         ):
             raise ValueError("max_body_bytes must be a positive integer")
+        if (
+            isinstance(auth_timeout_ms, bool)
+            or not isinstance(auth_timeout_ms, int)
+            or auth_timeout_ms <= 0
+        ):
+            raise ValueError("auth_timeout_ms must be a positive integer")
+
+        warn_if_origins_omitted_in_production("HTTP", origins)
 
         self.server = server
         self.origins = None if origins is None else list(origins)
         self.allow_originless = allow_originless
         self.max_body_bytes = max_body_bytes
+        self.auth_timeout_ms = auth_timeout_ms
 
         if rate_limit is True:
             self.rate_limit = RateLimit()
@@ -206,6 +231,15 @@ class HttpTransport:
                 headers=self._drain_response_headers(node) if node is not None else None,
             )
         except SchemaValidationError as err:
+            self.server.emit_server_event(
+                ServerEvents.METHOD_ERROR,
+                {
+                    "error": redact_method_telemetry(method, err),
+                    "method": method_name,
+                    "params": redact_method_telemetry(method, payload.get("params")),
+                    "user_id": node.user_id if node is not None else None,
+                },
+            )
             drained = self._drain_response_headers(node) if node is not None else None
             if is_void:
                 return _empty_200(headers=drained)
@@ -218,13 +252,21 @@ class HttpTransport:
                 errors=err.errors,
                 headers=drained,
             )
-        except Exception:
+        except Exception as err:
             # Unknown errors MUST NOT leak server internals; log and emit
             # INTERNAL_ERROR per PROTOCOL.md §9. TS envelope carries uuid only.
-            import logging
-
-            logging.getLogger(__name__).exception(
-                "TypeFerry method %s raised", method_name
+            if method.is_sensitive:
+                _log.error("TypeFerry sensitive method %s failed", method_name)
+            else:
+                _log.exception("TypeFerry method %s raised", method_name)
+            self.server.emit_server_event(
+                ServerEvents.METHOD_ERROR,
+                {
+                    "error": redact_method_telemetry(method, err),
+                    "method": method_name,
+                    "params": redact_method_telemetry(method, payload.get("params")),
+                    "user_id": node.user_id if node is not None else None,
+                },
             )
             return self._error(
                 Errors.INTERNAL_ERROR.value,
@@ -294,9 +336,37 @@ class HttpTransport:
         if self.server.auth is None:
             return
 
-        result = self.server.auth(node, ctx_payload)
-        if inspect.isawaitable(result):
-            result = await result
+        auth_fn = self.server.auth
+
+        async def _run_auth() -> Any:
+            if inspect.iscoroutinefunction(auth_fn):
+                outcome = auth_fn(node, ctx_payload)
+            else:
+                outcome = await asyncio.to_thread(auth_fn, node, ctx_payload)
+            if inspect.isawaitable(outcome):
+                return await outcome
+            return outcome
+
+        task = asyncio.create_task(_run_auth())
+        task.add_done_callback(_discard_auth_error)
+
+        try:
+            completed, _ = await asyncio.wait(
+                {task}, timeout=self.auth_timeout_ms / 1000
+            )
+            if not completed:
+                task.cancel()
+                result = None
+            else:
+                result = task.result()
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        except Exception:
+            _log.exception("TypeFerry HTTP auth hook raised; failing closed")
+            node.authenticated = False
+            node.set_context(None)
+            return
 
         node.authenticated = authentication_succeeded(result)
         node.set_context(result if node.authenticated and isinstance(result, dict) else None)
