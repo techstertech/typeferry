@@ -98,4 +98,29 @@ describe('modifyDocument', () => {
 
     expect(proto['polluted']).toBeUndefined()
   })
+
+  it('does not leak Object.prototype properties in readField or bypass field validation in $pushAll/$addToSet', () => {
+    const doc = document()
+    expect(() =>
+      modifyDocument(doc, { $inc: { toString: 1 } }),
+    ).not.toThrow()
+    expect(doc['toString']).toBe(1)
+
+    const renameDoc = document()
+    modifyDocument(renameDoc, { $rename: { toString: 'moved' } })
+    expect(renameDoc['moved']).toBeUndefined()
+
+    expect(() =>
+      modifyDocument(document(), { $pushAll: { tags: [{ $bad: 1 }] } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      modifyDocument(document(), { $pushAll: { tags: [JSON.parse('{"__proto__":{"polluted":true}}') as unknown] } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      modifyDocument(document(), { $addToSet: { tags: { $each: [{ $bad: 1 }] } } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      modifyDocument(document(), { $addToSet: { tags: JSON.parse('{"__proto__":{"polluted":true}}') as unknown } }),
+    ).toThrow(LocalCollectionError)
+  })
 })

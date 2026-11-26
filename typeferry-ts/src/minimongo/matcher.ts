@@ -60,13 +60,21 @@ function regexMatches(regex: RegExp, value: unknown): boolean {
   return regex.test(value)
 }
 
+const MAX_BIT_POSITION = 4096
+const MAX_BITMASK_BYTES = (MAX_BIT_POSITION >> 3) + 1
+
 function bitMask(operand: unknown, operator: string): Uint8Array {
   if (Number.isInteger(operand) && Number(operand) >= 0 && Number(operand) <= 0x7fffffff) {
     return new Uint8Array(new Int32Array([Number(operand)]).buffer)
   }
-  if (operand instanceof Uint8Array) return operand
+  if (operand instanceof Uint8Array) {
+    if (operand.byteLength > MAX_BITMASK_BYTES) {
+      throw new LocalQueryError(`operand to ${operator} bitmask must not exceed ${MAX_BITMASK_BYTES} bytes`)
+    }
+
+    return operand
+  }
   if (Array.isArray(operand) && operand.every(value => Number.isInteger(value) && value >= 0)) {
-    const MAX_BIT_POSITION = 4096
     let maximum = 0
     for (const position of operand) {
       if (position > MAX_BIT_POSITION) {
@@ -396,17 +404,17 @@ export class Matcher<TDocument extends object = object> {
       return this.elementMatcher(value => {
         const candidate = valueMask(value, mask.length)
         if (!candidate) return false
-        if (operator === '$bitsAllSet') {
-          return [...mask].every((byte, index) => ((candidate[index] ?? 0) & byte) === byte)
-        }
-        if (operator === '$bitsAnySet') {
-          return [...mask].some((byte, index) => ((candidate[index] ?? 0) & byte) !== 0)
-        }
-        if (operator === '$bitsAllClear') {
-          return [...mask].every((byte, index) => ((candidate[index] ?? 0) & byte) === 0)
+
+        for (let index = 0; index < mask.length; index += 1) {
+          const byte = mask[index] ?? 0
+          const candidateByte = candidate[index] ?? 0
+          if (operator === '$bitsAllSet' && (candidateByte & byte) !== byte) return false
+          if (operator === '$bitsAnySet' && (candidateByte & byte) !== 0) return true
+          if (operator === '$bitsAllClear' && (candidateByte & byte) !== 0) return false
+          if (operator === '$bitsAnyClear' && (candidateByte & byte) !== byte) return true
         }
 
-        return [...mask].some((byte, index) => ((candidate[index] ?? 0) & byte) !== byte)
+        return operator === '$bitsAllSet' || operator === '$bitsAllClear'
       })
     }
     if (operator === '$maxDistance') {

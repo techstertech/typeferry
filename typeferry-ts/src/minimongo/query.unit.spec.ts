@@ -56,6 +56,9 @@ describe('Matcher', () => {
     expect(() => new Matcher({ score: { $bitsAnySet: [0x7fffffff] } })).toThrow(
       LocalQueryError,
     )
+    expect(() => new Matcher({ score: { $bitsAnySet: new Uint8Array(600) } })).toThrow(
+      LocalQueryError,
+    )
   })
 })
 
@@ -96,5 +99,15 @@ describe('Sorter and projection', () => {
     expect(compileProjection({ _id: 1 })(source)).toEqual({ _id: 'one' })
     expect(() => compileProjection({ rows: 1, 'rows.kept': 1 }))
       .toThrow('using both of them may trigger unexpected behavior')
+  })
+
+  it('blocks prototype pollution segments and prototype property collisions in compileProjection', () => {
+    expect(() => compileProjection({ '__proto__.polluted': 1 })).toThrow()
+    expect(() => compileProjection({ 'constructor.prototype.polluted': 1 })).toThrow()
+
+    const ownProtoNamedField = compileProjection({ toString: 1, _id: 0 })
+    const docWithOwn = Object.assign({ name: 'a' }, { toString: 'custom' })
+    expect(ownProtoNamedField(docWithOwn)).toEqual({ toString: 'custom' })
+    expect(ownProtoNamedField({ name: 'a' } as Record<string, unknown>)).toEqual({})
   })
 })

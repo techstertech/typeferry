@@ -27,7 +27,14 @@ function cloneValue<TValue>(value: TValue): TValue {
   if (Array.isArray(value)) return value.map(item => cloneValue(item)) as TValue
 
   const result: Record<string, unknown> = {}
-  for (const key of Object.keys(value)) result[key] = cloneValue(value[key])
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(result, key, {
+      value: cloneValue(value[key]),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+  }
 
   return result as TValue
 }

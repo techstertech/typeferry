@@ -117,7 +117,9 @@ function modificationTarget(
 }
 
 function readField(target: Target): unknown {
-  return target.parent ? Reflect.get(target.parent, target.field) as unknown : undefined
+  return target.parent && Object.hasOwn(target.parent, target.field)
+    ? (Reflect.get(target.parent, target.field) as unknown)
+    : undefined
 }
 
 function writeField(target: Target, value: unknown): void {
@@ -238,11 +240,13 @@ function applyModifierOperator(
     applyPush(target, argument, values)
   } else if (actualOperator === '$pushAll') {
     if (!Array.isArray(argument)) throw new LocalCollectionError('Modifier $pushAll/pullAll allowed for arrays only')
+    assertValidFieldNames(argument)
     if (current === undefined) writeField(target, argument)
     else if (!Array.isArray(current)) throw new LocalCollectionError('Cannot apply $pushAll modifier to non-array', { field: path })
     else current.push(...argument)
   } else if (actualOperator === '$addToSet') {
     const items = isPlainObject(argument) && Array.isArray(argument.$each) ? argument.$each : [argument]
+    assertValidFieldNames(items)
     if (current === undefined) writeField(target, items)
     else if (!Array.isArray(current)) throw new LocalCollectionError('Cannot apply $addToSet modifier to non-array', { field: path })
     else for (const item of items) {

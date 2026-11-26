@@ -1,5 +1,5 @@
 import { LocalCollectionError as LocalCollectionError } from './errors'
-import { isPlainObject } from './path'
+import { FORBIDDEN_PATH_KEYS, isPlainObject } from './path'
 import type { Projection } from './types'
 import { localValueSemantics, type ValueSemantics } from './value-semantics'
 
@@ -28,8 +28,11 @@ function projectionDetails(projection: Record<string, unknown>): {
     let node = tree
     for (let index = 0; index < parts.length; index += 1) {
       const part = parts[index]!
+      if (FORBIDDEN_PATH_KEYS.has(part)) {
+        throw new LocalCollectionError('Prototype pollution path segments are not allowed', { field: path })
+      }
       const final = index === parts.length - 1
-      const existing = node[part]
+      const existing = Object.hasOwn(node, part) ? node[part] : undefined
       if (existing !== undefined) {
         if (final || typeof existing === 'boolean') {
           const existingPath = parts.slice(0, index + 1).join('.')
