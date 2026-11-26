@@ -72,6 +72,12 @@ export class NodeHonoTransport {
       this.handleFetch(request, env as HttpBindings),
     )
     this.http = createServer((request, response) => {
+      if (isRpcPath(request.url) && hasDuplicateRawOrigin(request.rawHeaders)) {
+        response.statusCode = 403
+        response.end('Forbidden')
+        return
+      }
+
       if (!this.server.requestListener) {
         void honoListener(request, response)
         return
@@ -398,7 +404,7 @@ export class NodeHonoTransport {
       string | undefined
 
     if (typeof token === 'string' && token.length && token !== 'undefined') {
-      context.token = token.replace('Bearer ', '')
+      context.token = token.replace(/^Bearer /, '')
     }
 
     if (this.server.auth instanceof Function) {
@@ -641,6 +647,27 @@ function filterAllowedContext(
     }
   }
   return filtered
+}
+
+function isRpcPath(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false
+  try {
+    const { pathname } = new URL(rawUrl, 'http://localhost')
+    return pathname === '/__h' || pathname.startsWith('/__h/')
+  } catch {
+    return false
+  }
+}
+
+function hasDuplicateRawOrigin(rawHeaders: readonly string[]): boolean {
+  let count = 0
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    if (rawHeaders[i]?.toLowerCase() === 'origin') {
+      count += 1
+      if (count > 1) return true
+    }
+  }
+  return false
 }
 
 function hasMultipleOriginHeaders(headers: Headers): boolean {

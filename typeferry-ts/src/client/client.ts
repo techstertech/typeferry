@@ -744,14 +744,15 @@ export class Client<
     const optionHeaders = new Headers(options.headers)
     const headers = Object.fromEntries(optionHeaders.entries())
     const token = this.context.token
-    const baseOrigin = new URL(this.clientHttp.host).origin
     let isSameBackendOrigin = false
     try {
+      const baseOrigin = new URL(this.clientHttp.host).origin
       const target = new URL(
         url,
         typeof window !== 'undefined' ? window.location.origin : baseOrigin,
       )
-      isSameBackendOrigin = target.origin === baseOrigin
+      isSameBackendOrigin =
+        baseOrigin !== 'null' && target.origin === baseOrigin
     } catch {
       isSameBackendOrigin = false
     }

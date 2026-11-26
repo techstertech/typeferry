@@ -142,10 +142,26 @@ export function sendResponse(
     payload.result = result
   }
 
+  let encoded: string
   try {
-    node.socket.send(Presentation.encode(payload))
+    encoded = Presentation.encode(payload)
   } catch {
-    // Socket may close or result may not serialize cleanly; avoid unhandled rejection.
+    if (error) return
+    try {
+      encoded = Presentation.encode({
+        t: MessageType.RPC_RESPONSE,
+        id,
+        error: Errors.INTERNAL_ERROR,
+      })
+    } catch {
+      return
+    }
+  }
+
+  try {
+    node.socket.send(encoded)
+  } catch {
+    // Socket may close between readyState check and send.
   }
 }
 
@@ -266,10 +282,7 @@ export function validateUuid(uuid: unknown): string {
     uuid.length > MAX_UUID_LENGTH ||
     !/^[a-zA-Z0-9-]+$/.test(uuid)
   ) {
-    return (
-      crypto.randomUUID?.() ??
-      `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    )
+    return Presentation.uuid()
   }
   return uuid
 }

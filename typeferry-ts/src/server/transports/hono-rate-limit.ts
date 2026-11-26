@@ -41,15 +41,16 @@ export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
 
     let entry = store.get(peerAddress)
     if (!entry || entry.resetAt <= now) {
-      if (!entry && store.size >= MAX_RATE_LIMIT_BUCKETS) {
-        for (const [key, candidate] of store) {
-          if (candidate.resetAt <= now) store.delete(key)
-        }
-        if (store.size >= MAX_RATE_LIMIT_BUCKETS) {
-          const oldestKey = store.keys().next().value
-          if (oldestKey !== undefined || store.has(undefined)) {
-            store.delete(oldestKey)
-          }
+      if (entry) {
+        // Remove expired entry before re-inserting so Map order matches expiration order.
+        store.delete(peerAddress)
+      } else if (store.size >= MAX_RATE_LIMIT_BUCKETS) {
+        // Evict expired head entries first, then oldest bucket in O(1) amortized time.
+        while (store.size >= MAX_RATE_LIMIT_BUCKETS) {
+          const head = store.entries().next()
+          if (head.done) break
+          store.delete(head.value[0])
+          if (head.value[1].resetAt > now) break
         }
       }
       entry = { count: 0, resetAt: now + opts.windowMs }

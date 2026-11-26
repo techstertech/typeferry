@@ -653,6 +653,10 @@ it('filters HTTP transport.context using allowedContextKeys', async () => {
     )
     expect(body2.result['role']).toBeUndefined()
     expect(body2.result['locale']).toBe('en')
+    expect(seenContexts).toEqual([
+      { token: 'tok' },
+      { locale: 'en', token: 'tok' },
+    ])
   } finally {
     await restricted.close()
     await allowlisted.close()
@@ -684,6 +688,91 @@ it('does not allow unauthenticated WS UUID collision to overwrite or evict a liv
     expect(server.allClients.get('victim-id')).toBe(victimNode)
   } finally {
     victim.close()
+    await server.close()
+  }
+})
+
+it('rejects HTTP RPC requests carrying duplicate Origin headers and keeps mid-token Bearer intact', async () => {
+  const seenTokens: unknown[] = []
+  const server = await startServer({ origins: [ALLOWED_ORIGIN] })
+  server.setAuth({
+    auth: async (context) => {
+      seenTokens.push(context.token)
+      return {
+        ...(context.token === undefined ? {} : { token: context.token }),
+        user: { _id: 'u1' },
+      }
+    },
+    logIn: async () => true,
+  })
+  server.addMethod(RPC_METHOD, async () => true)
+
+  try {
+    const rawStatus = await new Promise<number>((resolve, reject) => {
+      const socket = createConnection(server.port, HOST)
+      let response = ''
+      socket.on('connect', () => {
+        const body = Presentation.encode({
+          context: {},
+          payload: { method: RPC_METHOD },
+        })
+        socket.write(
+          `POST /__h HTTP/1.1\r\nHost: ${HOST}:${server.port}\r\nOrigin: ${ALLOWED_ORIGIN}\r\nOrigin: ${DENIED_ORIGIN}\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+        )
+      })
+      socket.on('data', chunk => {
+        response += chunk.toString()
+      })
+      socket.on('end', () => {
+        const match = /^HTTP\/1\.1 (\d+)/.exec(response)
+        resolve(match ? Number(match[1]) : 0)
+      })
+      socket.on('error', reject)
+    })
+    expect(rawStatus).toBe(403)
+
+    const tokenRes = await fetch(`http://${HOST}:${server.port}/__h`, {
+      method: 'POST',
+      headers: {
+        origin: ALLOWED_ORIGIN,
+        'content-type': 'text/plain',
+        'x-api-key': 'foo Bearer bar',
+      },
+      body: Presentation.encode({
+        context: {},
+        payload: { method: RPC_METHOD },
+      }),
+    })
+    expect(tokenRes.status).toBe(200)
+    expect(seenTokens).toEqual(['foo Bearer bar'])
+  } finally {
+    await server.close()
+  }
+})
+
+it('replies with Internal Error over WebSocket when response encoding fails', async () => {
+  const server = await startServer()
+  let tooDeep: Record<string, unknown> = { ok: 1 }
+  for (let i = 0; i < 160; i++) tooDeep = { nested: tooDeep }
+  server.addMethod('encode:fail', () => tooDeep)
+
+  const socket = new WebSocket(`ws://${HOST}:${server.port}/typeferry-ws`)
+  try {
+    expect(await nextFrame(socket)).toEqual({ t: 'auth', authenticated: false })
+    socket.send(
+      Presentation.encode({
+        t: 'rpc',
+        id: 'enc-1',
+        method: 'encode:fail',
+      }),
+    )
+    expect(await nextFrame(socket)).toEqual({
+      t: 'rpc:res',
+      id: 'enc-1',
+      error: Errors.INTERNAL_ERROR,
+    })
+  } finally {
+    socket.close()
     await server.close()
   }
 })

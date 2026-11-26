@@ -6,6 +6,7 @@ import { NO_CHANNEL, ServerEvents } from '../utils'
 import type { ClientNode } from './client-node'
 import { Method } from './method'
 import { Server } from './server'
+import { SocketState } from './types'
 
 export const MAX_EVENTS_PER_SUBSCRIPTION_BATCH = 256
 export const MAX_CHANNEL_NAME_LENGTH = 256
@@ -17,6 +18,19 @@ export const MAX_ROOMS_PER_SOCKET = 1024
  */
 export function getRoomName(channel: string, eventName: string): string {
   return `typeferry:${Buffer.byteLength(channel, 'utf8')}:${channel}:${eventName}`
+}
+
+function setOwnBoolean(
+  target: Record<string, boolean>,
+  key: string,
+  value: boolean,
+): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
 }
 
 function normalizeSubscriptionInput(rawParams: unknown): {
@@ -31,7 +45,7 @@ function normalizeSubscriptionInput(rawParams: unknown): {
   if (
     rawChannel !== undefined &&
     (typeof rawChannel !== 'string' ||
-      rawChannel.length > MAX_CHANNEL_NAME_LENGTH)
+      Buffer.byteLength(rawChannel, 'utf8') > MAX_CHANNEL_NAME_LENGTH)
   ) {
     return null
   }
@@ -44,9 +58,12 @@ function normalizeSubscriptionInput(rawParams: unknown): {
   if (!Array.isArray(rawEvents)) {
     return { events: [], channel }
   }
-  const events = rawEvents
-    .filter((item): item is string => typeof item === 'string')
-    .slice(0, MAX_EVENTS_PER_SUBSCRIPTION_BATCH)
+  if (rawEvents.length > MAX_EVENTS_PER_SUBSCRIPTION_BATCH) {
+    return null
+  }
+  const events = rawEvents.filter(
+    (item): item is string => typeof item === 'string',
+  )
 
   return { events, channel }
 }
@@ -59,7 +76,9 @@ export const rpcOff = (
     server,
     method,
     function (rawParams) {
-      if (!this.socket) return {}
+      if (!this.socket || this.socket.readyState !== SocketState.OPEN) {
+        return {}
+      }
       const socket = this.socket
 
       const rooms = server.webSocketTransport?.rooms
@@ -74,13 +93,13 @@ export const rpcOff = (
 
         if (!event) {
           console.log('[TypeFerry] Event Not Found:', eventName)
-          acc[eventName] = false
+          setOwnBoolean(acc, eventName, false)
           continue
         }
 
         const roomName = getRoomName(input.channel, eventName)
         rooms.leave(socket, roomName)
-        acc[eventName] = true
+        setOwnBoolean(acc, eventName, true)
       }
 
       return acc
@@ -97,6 +116,10 @@ async function canSubscribeToEvent(
   eventName: string,
   channel: string,
 ): Promise<boolean> {
+  if (!client.socket || client.socket.readyState !== SocketState.OPEN) {
+    return false
+  }
+
   const event = server.events.get(eventName)
 
   if (!event) {
@@ -114,7 +137,14 @@ async function canSubscribeToEvent(
   )
   if (!subscribeAllowed) return false
 
-  if (!client.socket) return false
+  // Re-check socket readiness and auth after async authorization in case
+  // logout or disconnect occurred while awaiting shouldSubscribe.
+  if (!client.socket || client.socket.readyState !== SocketState.OPEN) {
+    return false
+  }
+  if (event.isProtected && !client.authenticated) {
+    return false
+  }
 
   const rooms = server.webSocketTransport?.rooms
   if (!rooms) return false
@@ -151,16 +181,19 @@ export const rpcOn = (
       const acc: Record<string, boolean> = {}
 
       for (const eventName of input.events) {
-        if (!channelAllowed) {
-          acc[eventName] = false
+        if (
+          !channelAllowed ||
+          !this.socket ||
+          this.socket.readyState !== SocketState.OPEN
+        ) {
+          setOwnBoolean(acc, eventName, false)
           continue
         }
 
-        acc[eventName] = await canSubscribeToEvent(
-          server,
-          this,
+        setOwnBoolean(
+          acc,
           eventName,
-          input.channel,
+          await canSubscribeToEvent(server, this, eventName, input.channel),
         )
       }
 

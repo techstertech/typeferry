@@ -400,4 +400,58 @@ describe('room isolation and subscription bounds', () => {
     })
     expect(capped).toEqual({ ev: false })
   })
+
+  it('rejects oversized batches (>256), oversized UTF-8 channels, __proto__ event keys, and post-await deauth/closed sockets', async () => {
+    const server = createMockServer()
+    server.events.set('ev', createMockEvent('ev'))
+    const onMethod = rpcOn(server as any, 'rpc:on')
+    const offMethod = rpcOff(server as any, 'rpc:off')
+    const client = { socket: { readyState: 1 }, authenticated: true }
+
+    const tooMany = Array.from({ length: 257 }, (_, i) => `ev-${i}`)
+    expect(
+      await onMethod.fn.call(client as any, { events: tooMany, channel: 'c' }),
+    ).toEqual({})
+    expect(
+      await offMethod.fn.call(client as any, { events: tooMany, channel: 'c' }),
+    ).toEqual({})
+
+    const multiByteChannel = 'é'.repeat(200) // 400 UTF-8 bytes > 256
+    expect(
+      await onMethod.fn.call(client as any, {
+        events: ['ev'],
+        channel: multiByteChannel,
+      }),
+    ).toEqual({})
+
+    const protoOn = (await onMethod.fn.call(client as any, {
+      events: ['__proto__'],
+      channel: 'c',
+    })) as object
+    expect(Object.getPrototypeOf(protoOn)).toBe(Object.prototype)
+    expect(Object.hasOwn(protoOn, '__proto__')).toBe(true)
+
+    const protoOff = (await offMethod.fn.call(client as any, {
+      events: ['__proto__'],
+      channel: 'c',
+    })) as object
+    expect(Object.getPrototypeOf(protoOff)).toBe(Object.prototype)
+    expect(Object.hasOwn(protoOff, '__proto__')).toBe(true)
+
+    const delayedNode: any = { socket: { readyState: 1 }, authenticated: true }
+    server.events.set(
+      'prot',
+      createMockEvent('prot', {
+        isProtected: true,
+        shouldSubscribe: vi.fn(async () => {
+          delayedNode.authenticated = false
+          return true
+        }),
+      }),
+    )
+    expect(
+      await onMethod.fn.call(delayedNode, { events: ['prot'], channel: 'c' }),
+    ).toEqual({ prot: false })
+    expect(server.webSocketTransport.rooms.join).not.toHaveBeenCalled()
+  })
 })

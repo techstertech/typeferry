@@ -89,11 +89,47 @@ interface MemoizeOptions {
 
 const DEFAULT_MAX_CACHE_ENTRIES = 1000
 
+function isThenable<TResult>(
+  value: Promise<TResult> | TResult,
+): value is Promise<TResult> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as PromiseLike<TResult>).then === 'function'
+  )
+}
+
+function storeMemoizedEntry<TResult>(
+  cache: Map<string | undefined, { value: Promise<TResult> | TResult; timestamp: number }>,
+  key: string | undefined,
+  value: Promise<TResult> | TResult,
+  timestamp: number,
+  maxAge: number,
+  maxEntries: number,
+): void {
+  if (cache.has(key)) cache.delete(key)
+
+  if (cache.size >= maxEntries) {
+    for (const [entryKey, entry] of cache) {
+      if (timestamp - entry.timestamp >= maxAge) cache.delete(entryKey)
+    }
+    if (cache.size >= maxEntries) {
+      const oldest = cache.keys().next()
+      if (!oldest.done) cache.delete(oldest.value)
+    }
+  }
+
+  cache.set(key, { value, timestamp })
+}
+
 function customMemoize<TParameters, TResult>(
   fn: MethodFunction<TParameters, TResult>,
   options: MemoizeOptions = {}
 ): MethodFunction<TParameters, TResult> {
-  const cache = new Map<string, { value: Promise<TResult> | TResult; timestamp: number }>()
+  const cache = new Map<
+    string | undefined,
+    { value: Promise<TResult> | TResult; timestamp: number }
+  >()
   const { maxAge = 60000, maxEntries = DEFAULT_MAX_CACHE_ENTRIES } = options
 
   return function (this: ClientNode, parameters): Promise<TResult> | TResult {
@@ -110,37 +146,30 @@ function customMemoize<TParameters, TResult>(
     }
     if (cached) cache.delete(key)
 
-    if (cache.size >= maxEntries) {
-      for (const [entryKey, entry] of cache) {
-        if (now - entry.timestamp >= maxAge) cache.delete(entryKey)
-      }
-      if (cache.size >= maxEntries) {
-        const oldestKey = cache.keys().next().value
-        if (oldestKey !== undefined) cache.delete(oldestKey)
-      }
-    }
-
     const result = fn.call(this, parameters)
-    cache.set(key, { value: result, timestamp: now })
 
-    if (
-      result !== null &&
-      (typeof result === 'object' || typeof result === 'function') &&
-      typeof (result as PromiseLike<TResult>).then === 'function'
-    ) {
-      Promise.resolve(result).then(
-        () => {
-          if (this.authenticated || this.isServer) {
-            if (cache.get(key)?.value === result) cache.delete(key)
-          }
-        },
-        () => {
-          if (cache.get(key)?.value === result) cache.delete(key)
-        },
-      )
+    if (!isThenable(result)) {
+      if (!this.authenticated && !this.isServer) {
+        storeMemoizedEntry(cache, key, result, Date.now(), maxAge, maxEntries)
+      }
+      return result
     }
 
-    return result
+    // Do not poison the shared anonymous cache pre-settlement or when the
+    // execution elevates authentication / server privilege before resolving.
+    return Promise.resolve(result).then(resolved => {
+      if (!this.authenticated && !this.isServer) {
+        storeMemoizedEntry(
+          cache,
+          key,
+          Promise.resolve(resolved) as Promise<TResult>,
+          Date.now(),
+          maxAge,
+          maxEntries,
+        )
+      }
+      return resolved
+    })
   }
 }
 

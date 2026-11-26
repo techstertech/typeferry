@@ -463,4 +463,82 @@ describe('Methods', () => {
     await method.exec({ i: 0 }, anonNode)
     expect(calls).toBe(1006)
   })
+
+  it('evicts undefined-parameter cache entries at capacity and never populates cache pre-settlement or on auth elevation', async () => {
+    let undefinedCalls = 0
+    test.server.addMethod(
+      'cache:undefined-key',
+      async (params?: { i: number }) => {
+        if (params === undefined) undefinedCalls++
+        return params?.i ?? 'undef'
+      },
+      { cache: true },
+    )
+    const undefMethod = test.server.getMethod('cache:undefined-key')!
+    const anonNode = { authenticated: false, isServer: false, context: {} } as any
+    expect(await undefMethod.exec(undefined, anonNode)).toBe('undef')
+    for (let i = 0; i < 1000; i++) {
+      await undefMethod.exec({ i }, anonNode)
+    }
+    expect(await undefMethod.exec(undefined, anonNode)).toBe('undef')
+    expect(undefinedCalls).toBe(2)
+
+    let concurrentCalls = 0
+    let markEntered!: () => void
+    const firstEntered = new Promise<void>(resolve => {
+      markEntered = resolve
+    })
+    let rejectFirst!: (error: Error) => void
+    test.server.addMethod(
+      'cache:inflight',
+      () => {
+        concurrentCalls++
+        if (concurrentCalls === 1) {
+          return new Promise<string>((_, reject) => {
+            rejectFirst = reject
+            markEntered()
+          })
+        }
+        return Promise.resolve('second-ok')
+      },
+      { cache: true },
+    )
+    const inflightMethod = test.server.getMethod('cache:inflight')!
+    const first = inflightMethod.exec({ x: 1 }, anonNode)
+    await firstEntered
+    const second = inflightMethod.exec({ x: 1 }, anonNode)
+    rejectFirst(new PublicError('boom'))
+    await expect(first).rejects.toThrow('boom')
+    expect(await second).toBe('second-ok')
+
+    test.server.addMethod(
+      'cache:elevates-sync',
+      function () {
+        this.authenticated = true
+        return 'secret-sync'
+      },
+      { cache: true },
+    )
+    const syncElev = test.server.getMethod('cache:elevates-sync')!
+    const mutatingNode = { authenticated: false, isServer: false, context: {} } as any
+    expect(await syncElev.exec({ k: 1 }, mutatingNode)).toBe('secret-sync')
+    let secondHandler = false
+    test.server.addMethod(
+      'cache:elevates-sync-check',
+      function () {
+        this.authenticated = true
+        if (!secondHandler) {
+          secondHandler = true
+          return 'elevated'
+        }
+        return 'anon'
+      },
+      { cache: true },
+    )
+    const checkMethod = test.server.getMethod('cache:elevates-sync-check')!
+    await checkMethod.exec({ k: 1 }, { authenticated: false, isServer: false, context: {} } as any)
+    expect(
+      await checkMethod.exec({ k: 1 }, { authenticated: false, isServer: false, context: {} } as any),
+    ).toBe('anon')
+  })
 })
