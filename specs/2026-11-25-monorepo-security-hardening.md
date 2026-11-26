@@ -128,17 +128,23 @@ HTTP `transport.context`, and non-evicting WebSocket UUID collision handling on
 
 ## Verification record
 
+### Initial P0 + P1 hardening commits
+- Commits: `206f612` (`docs(protocol)`), `54b5899` (`fix(ts-ejson)`), `4a55780` (`fix(ts-minimongo)`), `01532cc` (`fix(ts-server)`), `f3e641d` (`fix(ts-auth)`), `5b2da58` (`fix(go)`), `b8546bf` (`fix(py)`), `20467cc` (`fix(rs)`).
+
+### Post-review remediation and final verification
+- Commits: `2e0dabf` (`docs(protocol)`), `fd08da8` (`fix(ts-minimongo)`), `d4048fb` (`fix(ts-ejson)`), `050c9bb` (`fix(ts-server)`), `eb600a7` (`fix(go)`), `2dacc35` (`fix(py)`), `bd33670` (`fix(rs)`).
 - **`typeferry-ts`:**
-  - Full unit suite (`node ./node_modules/.bin/vitest --config vitest.config.unit.ts --run --no-file-parallelism`): 142 files / 1847 tests passed.
-  - Shared fixture suites (`ws-fixtures.integration.spec.ts` 12/12, `http-fixtures.integration.spec.ts` 11/11, `ejson-fixtures.unit.spec.ts` 38/38): all passed.
-  - Cross-language conformance (`cross-lang-go-ws` 16/16, `cross-lang-go-http` 11/11, `cross-lang-rs` 6/6, `cross-lang` Py 5/5): all 38 passed.
-  - Typecheck, lint, and build (`tsc --noEmit`, `eslint src/`, `tsc -p tsconfig.build.json && node scripts/prepare-dist.mjs`): all exited 0 (`npm` wrapper not invoked directly due to `devEngines` Node 24.22.0 vs pinned 24.19.0; underlying TS CLI tools executed cleanly; browser/live-MongoDB/live-Redis integration suites not run).
+  - Minimongo unit suite (`src/minimongo`): 3 files / 23 tests passed.
+  - EJSON unit & conformance fixtures (`src/ejson`, `ejson-fixtures.unit.spec.ts`): 14 files / 292 tests passed.
+  - Post-Unit-4 targeted suites (`method.unit.spec.ts` 23/23, `client.unit.spec.ts` 58/58, `methods.unit.spec.ts` 23/23, `protocol-boundaries.unit.spec.ts` 43/43, plus `ws-fixtures`, `http-fixtures`, `caching.unit.spec.ts`): passed (141/142 full-unit files + 1853/1854 tests passed prior to final async-cache promise-return fix in `method.ts`, followed by full pass of `method.unit.spec.ts`, `client.unit.spec.ts`, `caching.unit.spec.ts`, `ws-fixtures`, and `http-fixtures`).
+  - Cross-language conformance (`cross-lang-rs` 6/6, `cross-lang-go-ws` 16/16, `cross-lang` Py 5/5, `cross-lang-go-http` 11/11): 4 files / 38 tests passed.
+  - Typecheck, lint, and build (`tsc --noEmit`, `eslint src/`, `tsc -p tsconfig.build.json && node scripts/prepare-dist.mjs`): all exited 0 (`npm` wrapper not invoked due to `devEngines` Node 24.22.0 vs pinned 24.19.0; browser/live-MongoDB/live-Redis integration suites not run).
 - **`typeferry-go`:**
-  - `go test -race -count=1 ./...` (Go 1.27.2): all 7 tested packages (`auth`, `authoring`, `ejson`, `httptransport`, `redistransport`, `runtime`, `websocket`) passed (`TestRedisCrossInstanceDelivery` skips cleanly when `TYPEFERRY_TEST_REDIS_URL` is unset).
+  - `go test -race -count=1 ./...` (Go 1.27): all 7 tested packages (`auth`, `authoring`, `ejson`, `httptransport`, `redistransport`, `runtime`, `websocket`) passed (`TestRedisCrossInstanceDelivery` skipped with `TYPEFERRY_TEST_REDIS_URL` unset).
   - `go vet ./...` and `gofmt -l .`: exited 0 with empty diff.
 - **`typeferry-py`:**
-  - `.venv/bin/python -m pytest`: 345/345 passed (including shared EJSON/HTTP/Redis/WS conformance fixtures).
+  - `.venv/bin/python -m pytest`: 346/346 passed (including shared EJSON/HTTP/Redis/WS conformance fixtures).
   - `.venv/bin/python -m ruff check .` and `.venv/bin/python -m mypy`: exited 0 (53 source files).
 - **`typeferry-rs`:**
-  - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`: all exited 0 across all workspace crates (1 pre-existing ignored doctest in `typeferry-macros`; Redis live lifecycle test requires external Redis if configured).
+  - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`: all exited 0 across all workspace crates (1 pre-existing ignored doctest in `typeferry-macros`; Redis live lifecycle test requires external Redis if configured). `typeferry-rs/target` (3.4 GiB) cleaned afterward with `cargo clean`.
 - **Formatting:** `git diff --check` exited 0.
