@@ -128,7 +128,9 @@ def _date_to_json(obj: datetime | _EpochMilliseconds) -> dict[str, int]:
 def _date_from_json(obj: dict[str, Any]) -> datetime | _EpochMilliseconds:
     ms = obj["$date"]
     if (
-        not isinstance(ms, (int, float)) or abs(ms) > _MAX_JAVASCRIPT_DATE_MS
+        isinstance(ms, bool)
+        or not isinstance(ms, (int, float))
+        or abs(ms) > _MAX_JAVASCRIPT_DATE_MS
         or (isinstance(ms, float) and not math.isfinite(ms))
     ):
         raise ValueError("Invalid JavaScript date milliseconds")
@@ -168,13 +170,19 @@ def _sanitize_flags(raw: str) -> str:
     return "".join(deduped)
 
 
+def _regexp_from_json(obj: dict[str, Any]) -> EJSONRegExp:
+    source = obj["$regexp"]
+    flags = obj["$flags"]
+    if not isinstance(source, str) or not isinstance(flags, str):
+        raise ValueError("$regexp and $flags must be strings")
+    return EJSONRegExp(source=source, flags=_sanitize_flags(flags))
+
+
 _REGEXP_CONVERTER = Converter(
     match_json_value=lambda o: _has_keys(o, "$regexp", "$flags"),
     match_object=lambda o: isinstance(o, EJSONRegExp),
     to_json_value=lambda r: {"$regexp": r.source, "$flags": r.flags},
-    from_json_value=lambda o: EJSONRegExp(
-        source=o["$regexp"], flags=_sanitize_flags(o["$flags"])
-    ),
+    from_json_value=_regexp_from_json,
 )
 
 
@@ -188,8 +196,10 @@ def _infnan_to_json(obj: float) -> dict[str, int]:
     return {"$InfNaN": sign}
 
 
-def _infnan_from_json(obj: dict[str, int]) -> float:
+def _infnan_from_json(obj: dict[str, Any]) -> float:
     sign = obj["$InfNaN"]
+    if isinstance(sign, bool) or sign not in (0, 1, -1):
+        raise ValueError("Invalid $InfNaN sign")
     if sign == 0:
         return float("nan")
     if sign == 1:
@@ -205,11 +215,18 @@ _INFNAN_CONVERTER = Converter(
 )
 
 
+def _binary_from_json(obj: dict[str, Any]) -> bytes:
+    encoded = obj["$binary"]
+    if not isinstance(encoded, str):
+        raise ValueError("$binary must be a string")
+    return decode_base64(encoded)
+
+
 _BINARY_CONVERTER = Converter(
     match_json_value=lambda o: _has_keys(o, "$binary"),
     match_object=_is_binary,
     to_json_value=lambda b: {"$binary": encode_base64(bytes(b))},
-    from_json_value=lambda o: decode_base64(o["$binary"]),
+    from_json_value=_binary_from_json,
 )
 
 
@@ -233,19 +250,25 @@ def _escape_match_object(obj: Any) -> bool:
     return any(c.match_json_value(obj) for c in builtin_converters)
 
 
-def _escape_to_json(obj: dict[str, Any]) -> dict[str, Any]:
+def _escape_to_json(obj: dict[str, Any], _depth: int = 0) -> dict[str, Any]:
     # Import lazily — ``to_json_value`` lives in a sibling module that
     # depends on this one.
-    from typeferry.ejson.to_from_json_value import to_json_value
+    from typeferry.ejson.to_from_json_value import MAX_EJSON_DEPTH, to_json_value
 
-    return {"$escape": {k: to_json_value(v) for k, v in obj.items()}}
+    if _depth >= MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
+    return {"$escape": {k: to_json_value(v, _depth + 1) for k, v in obj.items()}}
 
 
-def _escape_from_json(obj: dict[str, Any]) -> dict[str, Any]:
-    from typeferry.ejson.to_from_json_value import from_json_value
+def _escape_from_json(obj: dict[str, Any], _depth: int = 0) -> dict[str, Any]:
+    from typeferry.ejson.to_from_json_value import MAX_EJSON_DEPTH, from_json_value
 
+    if _depth >= MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
     inner = obj["$escape"]
-    return {k: from_json_value(v) for k, v in inner.items()}
+    if not isinstance(inner, dict):
+        raise ValueError("$escape value must be an object")
+    return {k: from_json_value(v, _depth + 1) for k, v in inner.items()}
 
 
 _ESCAPE_CONVERTER = Converter(
@@ -262,7 +285,7 @@ def _custom_to_json(obj: Any) -> dict[str, Any]:
 
 def _custom_from_json(obj: dict[str, Any]) -> Any:
     type_name = obj["$type"]
-    if not has_type(type_name):
+    if not isinstance(type_name, str) or not has_type(type_name):
         raise ValueError(f"Custom EJSON type {type_name} is not defined")
     return get_factory(type_name)(obj["$value"])
 

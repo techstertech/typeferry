@@ -236,7 +236,16 @@ async def authenticate_node(
     node.set_context(result if node.authenticated and isinstance(result, dict) else None)
 
     if node.authenticated:
-        server.emit_server_event(ServerEvents.AUTHENTICATION, node)
+        try:
+            server.emit_server_event(
+                ServerEvents.AUTHENTICATION, node, raise_on_error=True
+            )
+        except Exception:
+            _log.exception("Server authentication listener raised; failing closed")
+            node.authenticated = False
+            node.set_context(None)
+            await node.emit_auth_result(False)
+            return
 
     await node.emit_auth_result(node.authenticated)
 
@@ -276,6 +285,19 @@ def validate_meta(meta: Any) -> dict[str, Any]:
     return meta
 
 
+MAX_META_DEPTH = 128
+
+
+def _within_depth(value: Any, max_depth: int, depth: int = 0) -> bool:
+    if depth >= max_depth:
+        return not isinstance(value, (dict, list))
+    if isinstance(value, dict):
+        return all(_within_depth(v, max_depth, depth + 1) for v in value.values())
+    if isinstance(value, list):
+        return all(_within_depth(item, max_depth, depth + 1) for item in value)
+    return True
+
+
 def parse_meta(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -283,7 +305,9 @@ def parse_meta(raw: str | None) -> dict[str, Any]:
         if len(raw.encode("utf-8")) > MAX_META_SIZE:
             return {}
         decoded = json.loads(raw, parse_constant=_reject_json_constant)
-        return decoded if isinstance(decoded, dict) else {}
+        if not isinstance(decoded, dict) or not _within_depth(decoded, MAX_META_DEPTH):
+            return {}
+        return decoded
     except (ValueError, TypeError, RecursionError):
         return {}
 

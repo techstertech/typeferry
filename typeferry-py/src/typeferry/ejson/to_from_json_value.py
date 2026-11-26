@@ -21,17 +21,23 @@ from typing import Any
 
 from typeferry.ejson.converters import builtin_converters
 
+MAX_EJSON_DEPTH = 128
 
-def _try_to_json_value(item: Any) -> Any:
+
+def _try_to_json_value(item: Any, depth: int) -> Any:
     """Return the JSON form of ``item`` if a converter claims it, else ``_SENTINEL``."""
 
     for converter in builtin_converters:
         if converter.match_object(item):
+            from typeferry.ejson.converters import _ESCAPE_CONVERTER, _escape_to_json
+
+            if converter is _ESCAPE_CONVERTER and isinstance(item, dict):
+                return _escape_to_json(item, depth)
             return converter.to_json_value(item)
     return _SENTINEL
 
 
-def _try_from_json_value(item: Any) -> Any:
+def _try_from_json_value(item: Any, depth: int) -> Any:
     """Return the decoded form of ``item`` if it looks like a tag, else ``_SENTINEL``.
 
     Mirrors the TS ``fromJSONValueHelper`` gating: ``item`` must be an
@@ -48,6 +54,10 @@ def _try_from_json_value(item: Any) -> Any:
 
     for converter in builtin_converters:
         if converter.match_json_value(item):
+            from typeferry.ejson.converters import _ESCAPE_CONVERTER, _escape_from_json
+
+            if converter is _ESCAPE_CONVERTER:
+                return _escape_from_json(item, depth)
             return converter.from_json_value(item)
     return _SENTINEL
 
@@ -55,38 +65,44 @@ def _try_from_json_value(item: Any) -> Any:
 _SENTINEL: Any = object()
 
 
-def to_json_value(item: Any) -> Any:
+def to_json_value(item: Any, depth: int = 0) -> Any:
     """Convert a Python value into its JSON-compatible EJSON representation.
 
     Top-level converter match is tried first; otherwise recurse into
     containers.
     """
 
-    changed = _try_to_json_value(item)
+    if depth > MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
+
+    changed = _try_to_json_value(item, depth)
     if changed is not _SENTINEL:
         return changed
 
     if isinstance(item, dict):
-        return {key: to_json_value(value) for key, value in item.items()}
+        return {key: to_json_value(value, depth + 1) for key, value in item.items()}
     if isinstance(item, list):
-        return [to_json_value(value) for value in item]
+        return [to_json_value(value, depth + 1) for value in item]
     if isinstance(item, tuple):
         # JSON has no tuple; mirror JS array behavior.
-        return [to_json_value(value) for value in item]
+        return [to_json_value(value, depth + 1) for value in item]
 
     return item
 
 
-def from_json_value(item: Any) -> Any:
+def from_json_value(item: Any, depth: int = 0) -> Any:
     """Decode a JSON value produced by :func:`to_json_value` back to Python."""
 
-    changed = _try_from_json_value(item)
+    if depth > MAX_EJSON_DEPTH:
+        raise ValueError("EJSON nesting depth exceeds maximum")
+
+    changed = _try_from_json_value(item, depth)
     if changed is not _SENTINEL:
         return changed
 
     if isinstance(item, dict):
-        return {key: from_json_value(value) for key, value in item.items()}
+        return {key: from_json_value(value, depth + 1) for key, value in item.items()}
     if isinstance(item, list):
-        return [from_json_value(value) for value in item]
+        return [from_json_value(value, depth + 1) for value in item]
 
     return item

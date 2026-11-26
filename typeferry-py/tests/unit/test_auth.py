@@ -147,9 +147,10 @@ def test_device_info_ip_and_ua() -> None:
                 "Version/17.0 Safari/605.1.15"
             ),
             "x-forwarded-for": "10.0.0.1",
-        }
+        },
+        remote_address="198.51.100.5",
     )
-    assert info.ip == "10.0.0.1"
+    assert info.ip == "198.51.100.5"
     assert info.user_agent is not None
     # Either ua-parser is installed (returns typed fields) or it isn't
     # (returns just the raw UA string). Both are acceptable parity
@@ -158,8 +159,8 @@ def test_device_info_ip_and_ua() -> None:
 
 
 def test_device_info_without_ua_returns_only_ip() -> None:
-    info = parse_device_info({"x-forwarded-for": "1.2.3.4"})
-    assert info.ip == "1.2.3.4"
+    info = parse_device_info({"x-forwarded-for": "1.2.3.4"}, remote_address="198.51.100.6")
+    assert info.ip == "198.51.100.6"
     assert info.user_agent is None
 
 

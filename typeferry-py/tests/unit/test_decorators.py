@@ -150,8 +150,11 @@ async def test_cached_method_hits_cache() -> None:
 
     server = _server()
     register(server, API())
-    await server.call("read", {"a": 1})
-    await server.call("read", {"a": 1})
+    from typeferry.server.client_node import ClientNode
+
+    anon = ClientNode(server)
+    await server.call_method_on_node("read", {"a": 1}, anon)
+    await server.call_method_on_node("read", {"a": 1}, anon)
     assert count["n"] == 1
 
 
@@ -174,10 +177,13 @@ async def test_class_cached_default_with_no_cache_opt_out() -> None:
 
     server = _server()
     register(server, API())
-    await server.call("cached_op")
-    await server.call("cached_op")
-    await server.call("always_fresh")
-    await server.call("always_fresh")
+    from typeferry.server.client_node import ClientNode
+
+    anon = ClientNode(server)
+    await server.call_method_on_node("cached_op", None, anon)
+    await server.call_method_on_node("cached_op", None, anon)
+    await server.call_method_on_node("always_fresh", None, anon)
+    await server.call_method_on_node("always_fresh", None, anon)
     assert count["all"] == 1
     assert count["fresh"] == 2
 

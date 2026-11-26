@@ -22,6 +22,7 @@ path or combine it with other Starlette routes via
 from __future__ import annotations
 
 import inspect
+import re
 from typing import TYPE_CHECKING, Any
 
 from starlette.applications import Starlette
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
+_VALID_CLIENT_ID = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 
 
 class HttpTransport:
@@ -130,8 +132,11 @@ class HttpTransport:
     # ------------------------------------------------------------------
 
     async def _handle(self, request: Request) -> Response:
+        origin_values = request.headers.getlist("origin")
+        if len(origin_values) > 1:
+            return Response("", status_code=403)
         if not origin_allowed(
-            request.headers.get("origin"), self.origins,
+            origin_values[0] if origin_values else None, self.origins,
             allow_originless=self.allow_originless,
         ):
             return Response("", status_code=403)
@@ -158,10 +163,11 @@ class HttpTransport:
 
         transport = _parse_transport(request_body.decode("utf-8", errors="replace"))
 
-        if transport is None or transport.get("payload") is None:
+        raw_payload = transport.get("payload") if transport is not None else None
+        if transport is None or not isinstance(raw_payload, dict):
             return self._error(Errors.INVALID_REQUEST.value, None, None, None)
 
-        payload: dict[str, Any] = transport["payload"] or {}
+        payload: dict[str, Any] = raw_payload
         uuid = payload.get("uuid") if isinstance(payload.get("uuid"), str) else None
         is_void = bool(payload.get("void"))
 
@@ -174,23 +180,41 @@ class HttpTransport:
         if method is None:
             return self._error(Errors.METHOD_NOT_FOUND.value, None, method_name, is_void)
 
+        node: ClientNode | None = None
         try:
             node = await self._build_client_node(request, transport.get("context"), client_address)
 
             if method.is_protected and not node.authenticated:
                 # METHOD_FORBIDDEN: TS envelope carries method, no uuid.
-                return self._error(Errors.METHOD_FORBIDDEN.value, None, method_name, is_void)
+                return self._error(
+                    Errors.METHOD_FORBIDDEN.value,
+                    None,
+                    method_name,
+                    is_void,
+                    headers=self._drain_response_headers(node),
+                )
 
             result = await method.exec(payload.get("params"), node)
         except PublicError as err:
             # PublicError: TS envelope carries uuid, no method.
-            return self._error(err.message, uuid, None, is_void)
+            return self._error(
+                err.message,
+                uuid,
+                None,
+                is_void,
+                headers=self._drain_response_headers(node) if node is not None else None,
+            )
         except SchemaValidationError as err:
             if is_void:
                 return _empty_200()
             # SchemaValidationError: TS envelope carries uuid + errors, no method.
             return self._error(
-                err.message, uuid, None, is_void, errors=err.errors
+                err.message,
+                uuid,
+                None,
+                is_void,
+                errors=err.errors,
+                headers=self._drain_response_headers(node) if node is not None else None,
             )
         except Exception:
             # Unknown errors MUST NOT leak server internals; log and emit
@@ -201,7 +225,11 @@ class HttpTransport:
                 "TypeFerry method %s raised", method_name
             )
             return self._error(
-                Errors.INTERNAL_ERROR.value, uuid, None, is_void
+                Errors.INTERNAL_ERROR.value,
+                uuid,
+                None,
+                is_void,
+                headers=self._drain_response_headers(node) if node is not None else None,
             )
 
         # Per PROTOCOL.md §2.1.3 / TS parity: void suppresses error
@@ -227,19 +255,28 @@ class HttpTransport:
     async def _build_client_node(
         self, request: Request, context: Any, client_address: str
     ) -> ClientNode:
-        raw_headers = {k.lower(): v for k, v in request.headers.items()}
+        raw_headers: dict[str, str] = {}
+        for k, v in request.headers.items():
+            lower = k.lower()
+            raw_headers[lower] = (
+                f"{raw_headers[lower]}; {v}" if lower == "cookie" and lower in raw_headers else v
+            )
         node = ClientNode(self.server, headers=raw_headers)
         node.remote_address = client_address
 
         client_uuid = raw_headers.get(CLIENT_ID_HEADER_KEY)
-        if isinstance(client_uuid, str) and client_uuid:
+        if isinstance(client_uuid, str) and _VALID_CLIENT_ID.match(client_uuid):
             node.set_id(client_uuid)
 
         # Pending response headers (e.g. Set-Cookie) are queued on a
         # transport-scoped attribute drained after method execution.
         setattr(node, "_pending_response_headers", [])  # noqa: B010
 
-        ctx_payload: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
+        ctx_payload: dict[str, Any] = {}
+        if isinstance(context, dict) and self.server.allowed_context_keys:
+            for key in self.server.allowed_context_keys:
+                if key in context:
+                    ctx_payload[key] = context[key]
         token = raw_headers.get(TOKEN_HEADER_KEY)
         if isinstance(token, str) and token and token != "undefined":
             cleaned = token.removeprefix("Bearer ")
@@ -270,6 +307,7 @@ class HttpTransport:
         is_void: bool | None,
         *,
         errors: Any = None,
+        headers: list[tuple[str, str]] | None = None,
     ) -> Response:
         if is_void:
             return _empty_200()
@@ -280,7 +318,7 @@ class HttpTransport:
             body["method"] = method
         if errors is not None:
             body["errors"] = errors
-        return _ejson_response(body)
+        return _ejson_response(body, headers=headers)
 
     async def close(self) -> None:
         # Starlette apps do not own their own lifecycle; the ASGI server

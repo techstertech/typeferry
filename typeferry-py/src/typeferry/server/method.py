@@ -32,6 +32,7 @@ Middleware = Callable[..., Any]
 
 
 DEFAULT_MAX_AGE_MS = 60_000
+DEFAULT_MAX_CACHE_ENTRIES = 1000
 
 
 @dataclass(slots=True)
@@ -144,24 +145,20 @@ class Method:
 
 
 def _memoize(
-    fn: MethodFunction, *, max_age_ms: int
+    fn: MethodFunction, *, max_age_ms: int, max_entries: int = DEFAULT_MAX_CACHE_ENTRIES
 ) -> MethodFunction:
     """Cache-key algorithm MUST match TS: ``EJSON.stringify(first_arg)``
     with non-canonical output (PROTOCOL.md §6.3).
 
-    Authenticated calls bypass both lookup and storage so handler-owned
-    permission checks run on every invocation. Anonymous handlers must return
-    results independent of caller context.
-
-    The Python handler receives ``(node, params)``; the cache key is
-    computed from ``params`` (the first RPC argument) so it aligns with
-    the TS ``args[0]`` convention.
+    Authenticated and server-origin calls bypass both lookup and storage so
+    handler-owned permission checks run on every invocation. Failed or
+    canceled executions never enter the cache.
     """
 
     cache: dict[str, tuple[Any, float]] = {}
 
     async def memoized(node: ClientNode | None, params: Any) -> Any:
-        if node is not None and node.authenticated:
+        if node is not None and (node.authenticated or node.is_server):
             return await _call_possibly_async(fn, node, params)
 
         key = stringify(params)
@@ -169,7 +166,22 @@ def _memoize(
         hit = cache.get(key)
         if hit is not None and (now_ms - hit[1]) < max_age_ms:
             return hit[0]
+        if hit is not None:
+            cache.pop(key, None)
+
         result = await _call_possibly_async(fn, node, params)
+        if node is not None and (node.authenticated or node.is_server):
+            return result
+
+        if len(cache) >= max_entries:
+            expired = [k for k, (_, ts) in cache.items() if (now_ms - ts) >= max_age_ms]
+            for k in expired:
+                cache.pop(k, None)
+            if len(cache) >= max_entries:
+                oldest = next(iter(cache), None)
+                if oldest is not None:
+                    cache.pop(oldest, None)
+
         cache[key] = (result, now_ms)
         return result
 

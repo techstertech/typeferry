@@ -61,6 +61,8 @@ class InMemorySessionManager:
     async def create_session(
         self, user_id: str, device_info: DeviceInfo | None = None
     ) -> TokenPair:
+        if len(self._sessions) >= 10_000:
+            self._cleanup()
         family_id = _fresh_id()
         token = _fresh_id()
         session_id = _fresh_id()
@@ -189,13 +191,13 @@ class InMemorySessionManager:
         )
 
         session.replaced_by = new_token
-        session.used_at = time.time() * 1000
+        session.used_at = time.monotonic() * 1000
         self._sessions[new_token] = new_session
         return self._build_token_pair(new_token, session.user_id, new_session_id)
 
     def _handle_reused_token(self, session: Session) -> TokenPair | None:
         grace_ms = self.config.rotation_grace_period_seconds * 1000
-        now_ms = time.time() * 1000
+        now_ms = time.monotonic() * 1000
 
         if session.used_at is None or (now_ms - session.used_at) > grace_ms:
             # Out of grace → theft. Revoke the family.
@@ -207,7 +209,12 @@ class InMemorySessionManager:
         if session.replaced_by is None:
             return None
         next_session = self._sessions.get(session.replaced_by)
-        if next_session is None or next_session.is_revoked:
+        if (
+            next_session is None
+            or next_session.is_revoked
+            or next_session.replaced_by is not None
+            or _now_seconds() > next_session.expiration
+        ):
             return None
         return self._build_token_pair(
             next_session.token, next_session.user_id, next_session.id

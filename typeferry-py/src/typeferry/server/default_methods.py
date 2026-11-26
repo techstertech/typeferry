@@ -24,12 +24,23 @@ if TYPE_CHECKING:
     from typeferry.server.server import Server
 
 
+MAX_EVENTS_PER_SUBSCRIPTION_CALL = 256
+MAX_CHANNEL_LENGTH = 256
+MAX_ROOMS_PER_CLIENT = 1024
+
+
 async def _rpc_on(server: Server, node: ClientNode | None, params: Any) -> dict[str, bool]:
     if node is None:
         return {}
 
+    raw_events = params.get("events") if isinstance(params, dict) else None
+    if isinstance(raw_events, list) and len(raw_events) > MAX_EVENTS_PER_SUBSCRIPTION_CALL:
+        return {}
+
     events = _events_list(params)
     channel = _channel(params)
+    if len(channel) > MAX_CHANNEL_LENGTH:
+        return {}
 
     if not events:
         return {}
@@ -70,9 +81,10 @@ async def _rpc_off(server: Server, node: ClientNode | None, params: Any) -> dict
 async def _rpc_logout(server: Server, node: ClientNode | None, _params: Any) -> bool:
     if node is None:
         return False
-    node.context = {}
+    if node.socket is not None and server.websocket_transport is not None:
+        server.websocket_transport.rooms.leave_all(node.socket)
     node.authenticated = False
-    node.user_id = None
+    node.set_context(None)
     server.emit_server_event(ServerEvents.LOGOUT, node)
     return True
 
@@ -90,6 +102,10 @@ async def _can_subscribe(
     if not allowed:
         return False
 
+    # Re-check after awaiting in case authentication was revoked mid-flight.
+    if event.is_protected and not node.authenticated:
+        return False
+
     if node.socket is None:
         return False
 
@@ -97,7 +113,13 @@ async def _can_subscribe(
     if transport is None:
         return False
 
-    transport.rooms.join(node.socket, get_room_name(channel, event_name))
+    room_name = get_room_name(channel, event_name)
+    if not transport.rooms.has(node.socket, room_name):
+        entry = transport.rooms._socket_rooms.get(id(node.socket))
+        if entry is not None and len(entry[1]) >= MAX_ROOMS_PER_CLIENT:
+            return False
+
+    transport.rooms.join(node.socket, room_name)
     return True
 
 

@@ -26,7 +26,10 @@ _LOOKUP[ord("_")] = 63
 
 
 def _read_char(value: str, index: int) -> int:
-    decoded = _LOOKUP[ord(value[index])]
+    code = ord(value[index])
+    if code >= 256:
+        raise ValueError("Invalid base64 character")
+    decoded = _LOOKUP[code]
     if decoded == _INVALID_CHAR:
         raise ValueError("Invalid base64 character")
     return decoded
@@ -60,6 +63,10 @@ def decode_base64(value: str) -> bytes:
         raise ValueError("Invalid base64 string length")
 
     pad_index = value.find("=")
+    if pad_index != -1:
+        pad_count = len(value) - pad_index
+        if pad_count not in (1, 2) or value[pad_index:] != "=" * pad_count:
+            raise ValueError("Invalid base64 padding")
     valid_length = len(value) if pad_index == -1 else pad_index
     placeholder_length = 0 if valid_length == len(value) else 4 - (valid_length % 4)
 

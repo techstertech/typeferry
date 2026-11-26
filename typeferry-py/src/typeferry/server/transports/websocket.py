@@ -30,6 +30,7 @@ from typeferry.server.client_node import ClientNode
 from typeferry.server.room_registry import RoomRegistry
 from typeferry.server.socket import SocketState
 from typeferry.server.transports._origins import origin_allowed
+from typeferry.server.transports.rate_limit import RateLimit, SlidingWindowLimiter
 from typeferry.server.transports.ws_shared import (
     PING_INTERVAL_MS,
     PING_PAYLOAD,
@@ -39,14 +40,17 @@ from typeferry.server.transports.ws_shared import (
     handle_rpc,
     handle_rpc_void,
     parse_meta,
+    send_response,
     validate_uuid,
 )
+from typeferry.utils.errors import Errors
 
 if TYPE_CHECKING:
     from typeferry.server.server import Server
 
 
 _log = logging.getLogger(__name__)
+DEFAULT_MAX_WS_MESSAGE_BYTES = 1024 * 1024
 
 
 class StarletteSocket:
@@ -110,12 +114,27 @@ class WebSocketTransport:
         handshake_authenticator: WebSocketHandshakeAuthenticator | None = None,
         *,
         allow_originless: bool = False,
+        max_message_bytes: int = DEFAULT_MAX_WS_MESSAGE_BYTES,
+        rate_limit: RateLimit | bool | None = True,
     ) -> None:
+        if (
+            isinstance(max_message_bytes, bool)
+            or not isinstance(max_message_bytes, int)
+            or max_message_bytes <= 0
+        ):
+            raise ValueError("max_message_bytes must be a positive integer")
         self.server = server
         self.rooms = RoomRegistry()
         self.path = path
         self.origins = None if origins is None else set(origins)
         self.allow_originless = allow_originless
+        self.max_message_bytes = max_message_bytes
+        if rate_limit is True:
+            self.rate_limit: RateLimit | None = RateLimit()
+        elif isinstance(rate_limit, RateLimit):
+            self.rate_limit = rate_limit
+        else:
+            self.rate_limit = None
         self.accept_connections = True
         self.handshake_authenticator = handshake_authenticator
         self.route = WebSocketRoute(path, self._endpoint)
@@ -136,7 +155,11 @@ class WebSocketTransport:
             await ws.close(code=1013)
             return
 
-        origin = ws.headers.get("origin")
+        origin_values = ws.headers.getlist("origin")
+        if len(origin_values) > 1:
+            await ws.close(code=4403)
+            return
+        origin = origin_values[0] if origin_values else None
         if not origin_allowed(origin, self.origins, allow_originless=self.allow_originless):
             await ws.close(code=4403)
             return
@@ -148,17 +171,27 @@ class WebSocketTransport:
         await ws.accept()
 
         socket = StarletteSocket(ws)
-        headers = {k.lower(): v for k, v in ws.headers.items()}
+        headers: dict[str, str] = {}
+        for k, v in ws.headers.items():
+            lower = k.lower()
+            headers[lower] = f"{headers[lower]}; {v}" if lower == "cookie" and lower in headers else v
         node = ClientNode(self.server, socket=socket, headers=headers)
+        node.remote_address = ws.client.host if ws.client is not None else ""
         node.set_id(uuid)
         node.meta = meta
 
-        self.server.add_client(node)
+        self.server.add_ws_client(node)
         self.server.emit_server_event(ServerEvents.CONNECTION, node)
 
         ping_task = asyncio.create_task(self._ping_loop(socket))
         self._ping_tasks[id(socket)] = ping_task
         self._pong_received[id(socket)] = True
+
+        limiter = (
+            SlidingWindowLimiter(self.rate_limit)
+            if self.rate_limit is not None
+            else None
+        )
 
         try:
             await authenticate_node(
@@ -168,11 +201,11 @@ class WebSocketTransport:
                 self.handshake_authenticator,
                 WebSocketHandshake(
                     path=ws.url.path,
-                    headers={name.lower(): value for name, value in ws.headers.items()},
+                    headers=headers,
                     query={name: value for name, value in ws.query_params.items()},
                 ),
             )
-            await self._receive_loop(node, ws, socket)
+            await self._receive_loop(node, ws, socket, limiter)
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -187,10 +220,17 @@ class WebSocketTransport:
             self.server.delete_client(node)
 
     async def _receive_loop(
-        self, node: ClientNode, ws: WebSocket, socket: StarletteSocket
+        self,
+        node: ClientNode,
+        ws: WebSocket,
+        socket: StarletteSocket,
+        limiter: SlidingWindowLimiter | None = None,
     ) -> None:
         while True:
             raw = await ws.receive_text()
+            if len(raw.encode("utf-8")) > self.max_message_bytes:
+                await socket.close(code=1009)
+                return
             try:
                 msg = Presentation.decode(raw)
             except Exception:
@@ -204,23 +244,39 @@ class WebSocketTransport:
             msg_type = envelope.get("t")
 
             if msg_type == "rpc":
+                rpc_id = envelope.get("id")
+                method_name = envelope.get("method")
+                if not isinstance(rpc_id, str) or not rpc_id or not isinstance(method_name, str) or not method_name:
+                    if isinstance(rpc_id, str) and rpc_id:
+                        await send_response(node, rpc_id, error=Errors.INVALID_REQUEST.value)
+                    continue
+                if limiter is not None and not limiter.try_consume(node.uuid)[0]:
+                    await send_response(node, rpc_id, error=Errors.RATE_LIMIT_EXCEEDED.value)
+                    continue
                 await handle_rpc(
                     self.server,
                     node,
-                    envelope["id"],
-                    envelope["method"],
+                    rpc_id,
+                    method_name,
                     envelope.get("params"),
                 )
             elif msg_type == "rpc:void":
+                method_name = envelope.get("method")
+                if not isinstance(method_name, str) or not method_name:
+                    continue
+                if limiter is not None and not limiter.try_consume(node.uuid)[0]:
+                    continue
                 await handle_rpc_void(
                     self.server,
                     node,
-                    envelope["method"],
+                    method_name,
                     envelope.get("params"),
                 )
             elif msg_type == "pong":
                 self._pong_received[id(socket)] = True
             elif msg_type == "ping":
+                if limiter is not None and not limiter.try_consume(node.uuid)[0]:
+                    continue
                 # Clients don't send pings today, but echo a pong if they do.
                 from typeferry.protocol.messages import MessageType
 

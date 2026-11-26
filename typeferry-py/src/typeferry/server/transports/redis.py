@@ -185,7 +185,11 @@ class RedisTransport:
             message = decoded.get("message")
             exclude_uuid = decoded.get("excludeUuid")
 
-            if not isinstance(event, str) or not isinstance(message, str):
+            if (
+                not isinstance(event, str)
+                or not isinstance(channel, str)
+                or not isinstance(message, str)
+            ):
                 continue
 
             await self.server.channel(channel).propagate(

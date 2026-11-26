@@ -24,6 +24,16 @@ from typeferry.auth.types import AccessTokenPayload, AuthConfig
 _BEARER_RE = re.compile(r"^Bearer\s+", re.IGNORECASE)
 
 
+_ALLOWED_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
+
+def _validate_config(config: AuthConfig) -> None:
+    if not isinstance(config.secret, str) or not config.secret:
+        raise ValueError("JWT secret must be a non-empty string")
+    if config.algorithm not in _ALLOWED_ALGORITHMS:
+        raise ValueError(f"Unsupported JWT algorithm: {config.algorithm}")
+
+
 def _payload_to_wire(payload: AccessTokenPayload) -> dict[str, Any]:
     wire: dict[str, Any] = {
         "userId": payload.user_id,
@@ -37,11 +47,23 @@ def _payload_to_wire(payload: AccessTokenPayload) -> dict[str, Any]:
 
 
 def _payload_from_wire(decoded: dict[str, Any]) -> AccessTokenPayload:
+    user_id = decoded["userId"]
+    session_id = decoded["sessionId"]
+    iat = decoded["iat"]
+    exp = decoded["exp"]
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError("Invalid userId claim")
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("Invalid sessionId claim")
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+        raise ValueError("Invalid iat claim")
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        raise ValueError("Invalid exp claim")
     return AccessTokenPayload(
-        user_id=str(decoded["userId"]),
-        session_id=str(decoded["sessionId"]),
-        iat=int(decoded["iat"]),
-        exp=int(decoded["exp"]),
+        user_id=user_id,
+        session_id=session_id,
+        iat=int(iat),
+        exp=int(exp),
         claims=decoded.get("claims") if isinstance(decoded.get("claims"), dict) else None,
     )
 
@@ -53,6 +75,7 @@ def sign_access_token(payload: AccessTokenPayload, config: AuthConfig) -> str:
     prevent algorithm-confusion attacks (PROTOCOL.md §8.2).
     """
 
+    _validate_config(config)
     wire = _payload_to_wire(payload)
     result = pyjwt.encode(wire, config.secret, algorithm=config.algorithm)
     return result if isinstance(result, str) else result.decode("utf-8")
@@ -64,6 +87,7 @@ def verify_access_token(
     """Verify and decode an access token; returns None on any failure."""
 
     try:
+        _validate_config(config)
         clean_token = _BEARER_RE.sub("", token)
         decoded = pyjwt.decode(
             clean_token,
@@ -77,14 +101,12 @@ def verify_access_token(
     if not isinstance(decoded, dict):
         return None
 
-    # The TS implementation additionally enforces a ``maxAge`` via the
-    # token's ``iat``; pyjwt handles ``exp`` natively, and the TS
-    # maxAge (15m by default) is redundant with ``exp`` for tokens the
-    # manager itself issues. Preserve the equivalent check explicitly
-    # so clock-skew between signing hosts is bounded.
     iat = decoded.get("iat")
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+        return None
+    now = time.time()
     max_age = config.access_token_expiry_minutes * 60
-    if isinstance(iat, int | float) and (time.time() - iat) > max_age:
+    if (now - iat) > max_age or iat > (now + 5):
         return None
 
     try:

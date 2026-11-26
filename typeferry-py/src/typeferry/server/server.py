@@ -181,6 +181,10 @@ class Server(ServerChannel):
         instance = self.methods.get(method)
         if instance is None:
             raise KeyError(method)
+        if instance.is_protected and not node.authenticated:
+            from typeferry.utils.errors import Errors, PublicError
+
+            raise PublicError(Errors.METHOD_FORBIDDEN.value)
         return await instance.exec(params, node)
 
     # ------------------------------------------------------------------
@@ -209,8 +213,16 @@ class Server(ServerChannel):
     def add_client(self, node: ClientNode) -> None:
         self.all_clients[node.uuid] = node
 
+    def add_ws_client(self, node: ClientNode) -> None:
+        """Register a WS handshake node, assigning a fresh UUID on active collision."""
+
+        while node.uuid in self.all_clients and self.all_clients[node.uuid] is not node:
+            node.set_id(Presentation.uuid())
+        self.all_clients[node.uuid] = node
+
     def delete_client(self, node: ClientNode) -> None:
-        self.all_clients.pop(node.uuid, None)
+        if self.all_clients.get(node.uuid) is node:
+            self.all_clients.pop(node.uuid, None)
         self._remove_client_from_user_index(node)
         if node.socket is not None and self.websocket_transport is not None:
             self.websocket_transport.rooms.leave_all(node.socket)
@@ -272,7 +284,11 @@ class Server(ServerChannel):
         self._server_event_listeners.setdefault(key, []).append(listener)
 
     def emit_server_event(
-        self, name: str | ServerEvents, payload: Any = None
+        self,
+        name: str | ServerEvents,
+        payload: Any = None,
+        *,
+        raise_on_error: bool = False,
     ) -> None:
         """Synchronously fire server-side event listeners.
 
@@ -289,6 +305,8 @@ class Server(ServerChannel):
             try:
                 result = listener(payload)
             except Exception:
+                if raise_on_error:
+                    raise
                 import logging
 
                 logging.getLogger(__name__).exception(

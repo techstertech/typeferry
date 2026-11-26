@@ -7,10 +7,26 @@ Mirrors ``typeferry-ts/src/ejson/parse.ts`` and
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, NoReturn
 
 from typeferry.ejson.stable_stringify import javascript_object_order, stable_stringify
-from typeferry.ejson.to_from_json_value import from_json_value, to_json_value
+from typeferry.ejson.to_from_json_value import MAX_EJSON_DEPTH, from_json_value, to_json_value
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"Invalid JSON number constant: {value}")
+
+
+def _check_depth(value: Any, max_depth: int = MAX_EJSON_DEPTH, depth: int = 0) -> None:
+    if isinstance(value, (dict, list)):
+        if depth >= max_depth:
+            raise ValueError("EJSON nesting depth exceeds maximum")
+        if isinstance(value, dict):
+            for v in value.values():
+                _check_depth(v, max_depth, depth + 1)
+        else:
+            for item in value:
+                _check_depth(item, max_depth, depth + 1)
 
 
 def parse(source: str) -> Any:
@@ -18,7 +34,9 @@ def parse(source: str) -> Any:
 
     if not isinstance(source, str):
         raise TypeError("EJSON.parse argument should be a string")
-    return from_json_value(json.loads(source))
+    decoded = json.loads(source, parse_constant=_reject_json_constant)
+    _check_depth(decoded)
+    return from_json_value(decoded)
 
 
 def stringify(

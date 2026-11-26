@@ -219,7 +219,7 @@ async def test_rpc_on_off_subscribe_and_unsubscribe() -> None:
     )
     assert on_result == {"chat:message": True}
     assert server.websocket_transport.rooms.has(
-        node.socket, "typeferry:room-1:chat:message"
+        node.socket, "typeferry:6:room-1:chat:message"
     )
 
     off_result = await server.call_method_on_node(
@@ -227,7 +227,7 @@ async def test_rpc_on_off_subscribe_and_unsubscribe() -> None:
     )
     assert off_result == {"chat:message": True}
     assert not server.websocket_transport.rooms.has(
-        node.socket, "typeferry:room-1:chat:message"
+        node.socket, "typeferry:6:room-1:chat:message"
     )
 
 

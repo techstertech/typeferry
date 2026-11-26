@@ -12,6 +12,8 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
+MAX_LIMITER_BUCKETS = 100_000
+
 
 @dataclass(frozen=True, slots=True)
 class RateLimit:
@@ -23,6 +25,16 @@ class RateLimit:
     max: int = 120
     interval_ms: int = 60_000
 
+    def __post_init__(self) -> None:
+        if isinstance(self.max, bool) or not isinstance(self.max, int) or self.max <= 0:
+            raise ValueError("RateLimit.max must be a positive integer")
+        if (
+            isinstance(self.interval_ms, bool)
+            or not isinstance(self.interval_ms, int)
+            or self.interval_ms <= 0
+        ):
+            raise ValueError("RateLimit.interval_ms must be a positive integer")
+
 
 class SlidingWindowLimiter:
     """Minimal per-key sliding window counter.
@@ -31,8 +43,9 @@ class SlidingWindowLimiter:
     runtime is multi-threaded, wrap :meth:`try_consume` in a lock.
     """
 
-    def __init__(self, limit: RateLimit) -> None:
+    def __init__(self, limit: RateLimit, *, max_buckets: int = MAX_LIMITER_BUCKETS) -> None:
         self.limit = limit
+        self._max_buckets = max_buckets
         self._buckets: OrderedDict[str, deque[float]] = OrderedDict()
 
     def try_consume(self, key: str) -> tuple[bool, int, int]:
@@ -56,6 +69,8 @@ class SlidingWindowLimiter:
 
         bucket = self._buckets.get(key)
         if bucket is None:
+            while len(self._buckets) >= self._max_buckets:
+                self._buckets.popitem(last=False)
             bucket = deque()
             self._buckets[key] = bucket
 

@@ -23,10 +23,12 @@ def parse_device_info(
     """Parse a request's headers and address into a :class:`DeviceInfo`."""
 
     if headers is None:
-        return DeviceInfo()
+        return DeviceInfo(ip=remote_address)
 
     ua_string = _header(headers, "user-agent")
-    ip = _header(headers, "x-forwarded-for") or remote_address
+    if ua_string is not None and len(ua_string) > 512:
+        ua_string = ua_string[:512]
+    ip = remote_address
 
     if not ua_string:
         return DeviceInfo(ip=ip)

@@ -16,6 +16,7 @@ interceptor that routes every emit through the registered event's
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from typeferry.server.event import Event, EventOptions
@@ -77,11 +78,9 @@ class ServerChannel:
             if node is not None:
                 exclude_socket = node.socket
 
-        awaitables = rooms.broadcast(room_name, payload, exclude_socket)
-        # Individual senders may return coroutines; await the batch so
-        # concurrent sends complete before the emit resolves.
-        for awaitable in awaitables:
-            await awaitable
+        awaitables = [a for a in rooms.broadcast(room_name, payload, exclude_socket) if a is not None]
+        if awaitables:
+            await asyncio.gather(*awaitables, return_exceptions=True)
 
     # ------------------------------------------------------------------
     # Event registry (delegates to the shared server map)

@@ -62,9 +62,6 @@ class ClientNode:
 
         if headers:
             self.user_agent = headers.get("user-agent", "")
-            self.remote_address = (
-                headers.get("x-forwarded-for", "") or ""
-            )
 
     # ------------------------------------------------------------------
     # Auth / context
@@ -108,8 +105,10 @@ class ClientNode:
             user = self.context.get("user")
         user_id = None
         if isinstance(user, dict):
-            user_id = user.get("_id") or user.get("id")
-        if user_id is None:
+            user_id = user.get("_id")
+            if user_id is None:
+                user_id = user.get("id")
+        if user_id is None or isinstance(user_id, bool) or not user_id:
             return
         self.user_id = str(user_id)
         self.user = user if isinstance(user, dict) else None
