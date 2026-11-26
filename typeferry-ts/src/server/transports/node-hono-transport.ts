@@ -165,6 +165,9 @@ export class NodeHonoTransport {
     // Application routes such as static assets and health checks are outside
     // RPC origin admission. Browser navigation does not supply an Origin.
     this.app.use('/__h', async (context, next) => {
+      if (hasMultipleOriginHeaders(context.req.raw.headers)) {
+        return context.text('Forbidden', 403)
+      }
       if (!originAllowed(context.req.header('origin'))) {
         return context.text('Forbidden', 403)
       }
@@ -277,19 +280,23 @@ export class NodeHonoTransport {
 
     const clientNode = await this.buildClientNode(c, transport.context)
 
-    if (method.isProtected && !clientNode.authenticated) {
-      if (payload.void === true) return c.text('', 200)
-
-      return this.rpcError(c, Errors.METHOD_FORBIDDEN, {
-        method: payload.method,
-      })
-    }
-
     try {
-      const result = await method.exec(payload.params, clientNode)
-      return this.rpcSuccess(c, result, payload)
-    } catch (error) {
-      return this.handleRpcError(c, error, payload, clientNode, method)
+      if (method.isProtected && !clientNode.authenticated) {
+        if (payload.void === true) return c.text('', 200)
+
+        return this.rpcError(c, Errors.METHOD_FORBIDDEN, {
+          method: payload.method,
+        })
+      }
+
+      try {
+        const result = await method.exec(payload.params, clientNode)
+        return this.rpcSuccess(c, result, payload)
+      } catch (error) {
+        return this.handleRpcError(c, error, payload, clientNode, method)
+      }
+    } finally {
+      this.server.removeClientFromUserIndex(clientNode)
     }
   }
 
@@ -300,21 +307,29 @@ export class NodeHonoTransport {
   /** Hono middleware that requires authentication. Returns 403 on failure. */
   authMiddleware: MiddlewareHandler = async (c, next) => {
     const clientNode = this.buildClientNodeFromContext(c)
-    const ctx = await this.getServerContext(clientNode)
+    try {
+      const ctx = await this.getServerContext(clientNode)
 
-    if (ctx === false) {
-      return c.text('403 Forbidden', 403)
+      if (ctx === false) {
+        return c.text('403 Forbidden', 403)
+      }
+
+      c.set('context', ctx)
+      await next()
+    } finally {
+      this.server.removeClientFromUserIndex(clientNode)
     }
-
-    c.set('context', ctx)
-    await next()
   }
 
   /** Hono middleware that loads context without requiring auth. */
   contextMiddleware: MiddlewareHandler = async (c, next) => {
     const clientNode = this.buildClientNodeFromContext(c)
-    c.set('context', await this.getServerContext(clientNode))
-    await next()
+    try {
+      c.set('context', await this.getServerContext(clientNode))
+      await next()
+    } finally {
+      this.server.removeClientFromUserIndex(clientNode)
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -355,11 +370,21 @@ export class NodeHonoTransport {
     context: unknown,
   ): Promise<ClientNode> {
     const node = this.buildClientNodeFromContext(c)
-    node.uuid = c.req.header(CLIENT_ID_HEADER_KEY) ?? ''
-    const serverContext = await this.getServerContext(
-      node,
-      (context ?? {}) as Record<string, unknown>,
+    const rawClientId = c.req.header(CLIENT_ID_HEADER_KEY)
+    node.uuid =
+      rawClientId && /^[a-zA-Z0-9-]{1,64}$/.test(rawClientId)
+        ? rawClientId
+        : ''
+    const filteredContext = filterAllowedContext(
+      context,
+      this.server.allowedContextKeys,
     )
+    let serverContext: ClientNodeContext | false = false
+    try {
+      serverContext = await this.getServerContext(node, filteredContext)
+    } catch {
+      serverContext = false
+    }
     node.authenticated = serverContext !== false
     node.setContext(serverContext === false ? null : serverContext)
     return node
@@ -591,4 +616,37 @@ function getRequestBodyPolicy(
       matching.length > 0 &&
       matching.every((rule) => rule.bodyMode === 'streaming'),
   }
+}
+
+const FORBIDDEN_CONTEXT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function filterAllowedContext(
+  context: unknown,
+  allowedKeys: readonly string[],
+): Record<string, unknown> {
+  if (
+    !context ||
+    typeof context !== 'object' ||
+    Array.isArray(context) ||
+    allowedKeys.length === 0
+  ) {
+    return {}
+  }
+
+  const source = context as Record<string, unknown>
+  const filtered: Record<string, unknown> = {}
+  for (const key of allowedKeys) {
+    if (!FORBIDDEN_CONTEXT_KEYS.has(key) && Object.hasOwn(source, key)) {
+      filtered[key] = source[key]
+    }
+  }
+  return filtered
+}
+
+function hasMultipleOriginHeaders(headers: Headers): boolean {
+  let count = 0
+  headers.forEach((_value, name) => {
+    if (name.toLowerCase() === 'origin') count += 1
+  })
+  return count > 1
 }

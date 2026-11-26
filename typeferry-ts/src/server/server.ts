@@ -352,7 +352,9 @@ export class Server<
   }
 
   deleteClient(node: ClientNode) {
-    this.allClients.delete(node.uuid)
+    if (this.allClients.get(node.uuid) === node) {
+      this.allClients.delete(node.uuid)
+    }
     this.removeClientFromUserIndex(node)
 
     if (node.socket) {

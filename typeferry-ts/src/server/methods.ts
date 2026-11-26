@@ -7,12 +7,48 @@ import type { ClientNode } from './client-node'
 import { Method } from './method'
 import { Server } from './server'
 
+export const MAX_EVENTS_PER_SUBSCRIPTION_BATCH = 256
+export const MAX_CHANNEL_NAME_LENGTH = 256
+export const MAX_ROOMS_PER_SOCKET = 1024
+
 /**
- * Generates a room name for a channel/event subscription.
- * Format: `typeferry:${channel}:${event}`
+ * Generates a collision-free room name for a channel/event subscription.
+ * Format: `typeferry:${utf8ByteLength(channel)}:${channel}:${event}`
  */
 export function getRoomName(channel: string, eventName: string): string {
-  return `typeferry:${channel}:${eventName}`
+  return `typeferry:${Buffer.byteLength(channel, 'utf8')}:${channel}:${eventName}`
+}
+
+function normalizeSubscriptionInput(rawParams: unknown): {
+  events: string[]
+  channel: string
+} | null {
+  if (!rawParams || typeof rawParams !== 'object' || Array.isArray(rawParams)) {
+    return null
+  }
+  const params = rawParams as Record<string, unknown>
+  const rawChannel = params['channel']
+  if (
+    rawChannel !== undefined &&
+    (typeof rawChannel !== 'string' ||
+      rawChannel.length > MAX_CHANNEL_NAME_LENGTH)
+  ) {
+    return null
+  }
+  const channel =
+    typeof rawChannel === 'string' && rawChannel.length > 0
+      ? rawChannel
+      : NO_CHANNEL
+
+  const rawEvents = params['events']
+  if (!Array.isArray(rawEvents)) {
+    return { events: [], channel }
+  }
+  const events = rawEvents
+    .filter((item): item is string => typeof item === 'string')
+    .slice(0, MAX_EVENTS_PER_SUBSCRIPTION_BATCH)
+
+  return { events, channel }
 }
 
 export const rpcOff = (
@@ -22,29 +58,32 @@ export const rpcOff = (
   new Method(
     server,
     method,
-    function ({ events, channel = NO_CHANNEL }) {
+    function (rawParams) {
       if (!this.socket) return {}
       const socket = this.socket
 
       const rooms = server.webSocketTransport?.rooms
       if (!rooms) return {}
 
-      return events.reduce(
-        (acc: Record<string, boolean>, eventName: string) => {
-          const event = server.events.get(eventName)
+      const input = normalizeSubscriptionInput(rawParams)
+      if (!input) return {}
 
-          if (!event) {
-            console.log('[TypeFerry] Event Not Found:', eventName)
-            return { ...acc, [eventName]: false }
-          }
+      const acc: Record<string, boolean> = {}
+      for (const eventName of input.events) {
+        const event = server.events.get(eventName)
 
-          const roomName = getRoomName(channel, eventName)
-          rooms.leave(socket, roomName)
+        if (!event) {
+          console.log('[TypeFerry] Event Not Found:', eventName)
+          acc[eventName] = false
+          continue
+        }
 
-          return { ...acc, [eventName]: true }
-        },
-        {},
-      )
+        const roomName = getRoomName(input.channel, eventName)
+        rooms.leave(socket, roomName)
+        acc[eventName] = true
+      }
+
+      return acc
     },
     { protected: false },
   )
@@ -81,6 +120,13 @@ async function canSubscribeToEvent(
   if (!rooms) return false
 
   const roomName = getRoomName(channel, eventName)
+  if (
+    !rooms.has(client.socket, roomName) &&
+    rooms.getSocketRoomCount(client.socket) >= MAX_ROOMS_PER_SOCKET
+  ) {
+    return false
+  }
+
   rooms.join(client.socket, roomName)
 
   return true
@@ -93,17 +139,18 @@ export const rpcOn = (
   new Method(
     server,
     method,
-    async function ({ events, channel = NO_CHANNEL }) {
-      if (isEmpty(events)) return {}
+    async function (rawParams) {
+      const input = normalizeSubscriptionInput(rawParams)
+      if (!input || isEmpty(input.events)) return {}
 
       const channelAllowed = await server.shouldAllowChannelSubscribe(
         this,
-        channel,
+        input.channel,
       )
 
       const acc: Record<string, boolean> = {}
 
-      for (const eventName of events) {
+      for (const eventName of input.events) {
         if (!channelAllowed) {
           acc[eventName] = false
           continue
@@ -113,7 +160,7 @@ export const rpcOn = (
           server,
           this,
           eventName,
-          channel,
+          input.channel,
         )
       }
 
@@ -130,6 +177,9 @@ export const rpcLogout = (
     server,
     method,
     async function () {
+      if (this.socket) {
+        server.webSocketTransport?.rooms?.leaveAll(this.socket)
+      }
       this.context = null
       this.authenticated = false
       this.userId = null

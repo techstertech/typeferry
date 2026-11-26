@@ -137,6 +137,11 @@ export class RoomRegistry {
     await Promise.all(deliveries)
   }
 
+  /** Returns the number of rooms a socket has joined. */
+  getSocketRoomCount(ws: TypeFerrySocket): number {
+    return this.socketRooms.get(ws)?.size ?? 0
+  }
+
   /** Returns true if `ws` is a member of `room`. */
   has(ws: TypeFerrySocket, room: string): boolean {
     return this.rooms.get(room)?.has(ws) ?? false

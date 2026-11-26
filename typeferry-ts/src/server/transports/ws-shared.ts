@@ -142,7 +142,11 @@ export function sendResponse(
     payload.result = result
   }
 
-  node.socket.send(Presentation.encode(payload))
+  try {
+    node.socket.send(Presentation.encode(payload))
+  } catch {
+    // Socket may close or result may not serialize cleanly; avoid unhandled rejection.
+  }
 }
 
 function handleRpcError(

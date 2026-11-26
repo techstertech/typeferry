@@ -12,6 +12,7 @@ interface RateLimitOptions {
 }
 
 const MILLISECONDS_PER_SECOND = 1000
+const MAX_RATE_LIMIT_BUCKETS = 100_000
 
 /** Hono middleware whose cleanup timer follows its owning transport lifecycle. */
 export type DisposableRateLimiter = MiddlewareHandler & {
@@ -40,6 +41,17 @@ export function rateLimiter(opts: RateLimitOptions): DisposableRateLimiter {
 
     let entry = store.get(peerAddress)
     if (!entry || entry.resetAt <= now) {
+      if (!entry && store.size >= MAX_RATE_LIMIT_BUCKETS) {
+        for (const [key, candidate] of store) {
+          if (candidate.resetAt <= now) store.delete(key)
+        }
+        if (store.size >= MAX_RATE_LIMIT_BUCKETS) {
+          const oldestKey = store.keys().next().value
+          if (oldestKey !== undefined || store.has(undefined)) {
+            store.delete(oldestKey)
+          }
+        }
+      }
       entry = { count: 0, resetAt: now + opts.windowMs }
       store.set(peerAddress, entry)
     }

@@ -40,13 +40,20 @@ export enum WebSocketTransportEvents {
   WEBSOCKET_SERVER_ERROR = 'websocket:server:error',
 }
 
+const UPGRADE_BAD_REQUEST_RESPONSE =
+  'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
 const UPGRADE_NOT_FOUND_RESPONSE =
   'HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
 const UPGRADE_FORBIDDEN_RESPONSE =
   'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
+const DEFAULT_MAX_WS_PAYLOAD_BYTES = 16 * 1024 * 1024
 
 export interface WebSocketTransportOptions {
   path?: string
+  /**
+   * Maximum WebSocket message payload size in bytes (defaults to 16 MiB).
+   */
+  maxPayload?: number
   /**
    * Admits an absent Origin under a configured allowlist.
    * This does not change HTTP RPC admission or permit mismatching origins.
@@ -86,7 +93,10 @@ export class WebSocketTransport {
     this.originAllowed = createOriginChecker(origins, opts?.allowOriginless)
     this.handshakeAuthenticator = opts?.handshakeAuthenticator
 
-    this.wss = new WebSocketServer({ noServer: true })
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: opts?.maxPayload ?? DEFAULT_MAX_WS_PAYLOAD_BYTES,
+    })
     this.wss.on('error', (error: Error) =>
       server.emit(WebSocketTransportEvents.WEBSOCKET_SERVER_ERROR, error),
     )
@@ -102,7 +112,13 @@ export class WebSocketTransport {
     httpTransport.http.on(
       'upgrade',
       (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
-        const url = new URL(req.url ?? '', 'http://localhost')
+        let url: URL
+        try {
+          url = new URL(req.url ?? '', 'http://localhost')
+        } catch {
+          this.rejectUpgrade(socket, UPGRADE_BAD_REQUEST_RESPONSE)
+          return
+        }
 
         if (url.pathname !== this.path) {
           this.rejectUpgrade(socket, UPGRADE_NOT_FOUND_RESPONSE)
@@ -132,13 +148,31 @@ export class WebSocketTransport {
   }
 
   private validateOrigin(req: http.IncomingMessage): boolean {
+    if (Array.isArray(req.rawHeaders)) {
+      let originCount = 0
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        if (req.rawHeaders[i]?.toLowerCase() === 'origin') {
+          originCount += 1
+          if (originCount > 1) return false
+        }
+      }
+    }
     return this.originAllowed(req.headers.origin)
   }
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
-    const url = new URL(req.url ?? '', 'http://localhost')
+    let url: URL
+    try {
+      url = new URL(req.url ?? '', 'http://localhost')
+    } catch {
+      ws.close()
+      return
+    }
 
-    const uuid = validateUuid(url.searchParams.get('uuid'))
+    let uuid = validateUuid(url.searchParams.get('uuid'))
+    if (this.server.allClients?.has(uuid)) {
+      uuid = Presentation.uuid()
+    }
     const token = url.searchParams.get('token') ?? undefined
     const meta = parseMeta(url.searchParams.get('meta'))
     const handshake: WebSocketHandshake = {
@@ -204,9 +238,13 @@ export class WebSocketTransport {
       const msg = Presentation.decode<{ t: string }>(text)
 
       if (isRpcMessage(msg)) {
-        handleRpc(this.server, node, msg.id, msg.method, msg.params)
+        void handleRpc(this.server, node, msg.id, msg.method, msg.params).catch(
+          () => undefined,
+        )
       } else if (isRpcVoidMessage(msg)) {
-        handleRpcVoid(this.server, node, msg.method, msg.params)
+        void handleRpcVoid(this.server, node, msg.method, msg.params).catch(
+          () => undefined,
+        )
       } else if (isPongMessage(msg) && node.socket) {
         this.pongReceived.set(node.socket, true)
       }

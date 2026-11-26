@@ -296,6 +296,17 @@ describe('Server', () => {
 
       expect(s.webSocketTransport.rooms.leaveAll).toHaveBeenCalledWith(socket)
     })
+
+    it('does not delete a replacement node when deleting a stale node with the same uuid', () => {
+      const s = createServer()
+      const active = { uuid: 'n1', socket: null, userId: null, close: vi.fn() } as any
+      const stale = { uuid: 'n1', socket: null, userId: null, close: vi.fn() } as any
+
+      s.addClient(active)
+      s.deleteClient(stale)
+
+      expect(s.allClients.get('n1')).toBe(active)
+    })
   })
 
   describe('indexClientByUserId / removeClientFromUserIndex / getClientsByUserId', () => {

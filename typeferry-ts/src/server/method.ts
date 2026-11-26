@@ -84,18 +84,22 @@ export function redactMethodTelemetry(
 
 interface MemoizeOptions {
   maxAge?: number
+  maxEntries?: number
 }
+
+const DEFAULT_MAX_CACHE_ENTRIES = 1000
 
 function customMemoize<TParameters, TResult>(
   fn: MethodFunction<TParameters, TResult>,
   options: MemoizeOptions = {}
 ): MethodFunction<TParameters, TResult> {
   const cache = new Map<string, { value: Promise<TResult> | TResult; timestamp: number }>()
-  const { maxAge = 60000 } = options
+  const { maxAge = 60000, maxEntries = DEFAULT_MAX_CACHE_ENTRIES } = options
 
   return function (this: ClientNode, parameters): Promise<TResult> | TResult {
-    // Inline authorization must run even when the same caller repeats a request.
-    if (this.authenticated) return fn.call(this, parameters)
+    // Inline authorization must run even when the same caller repeats a request,
+    // and server-origin calls must never populate the shared anonymous cache.
+    if (this.authenticated || this.isServer) return fn.call(this, parameters)
 
     const key = EJSON.stringify(parameters) // Normalize method params
     const now = Date.now()
@@ -104,9 +108,38 @@ function customMemoize<TParameters, TResult>(
     if (cached && now - cached.timestamp < maxAge) {
       return cached.value
     }
+    if (cached) cache.delete(key)
+
+    if (cache.size >= maxEntries) {
+      for (const [entryKey, entry] of cache) {
+        if (now - entry.timestamp >= maxAge) cache.delete(entryKey)
+      }
+      if (cache.size >= maxEntries) {
+        const oldestKey = cache.keys().next().value
+        if (oldestKey !== undefined) cache.delete(oldestKey)
+      }
+    }
 
     const result = fn.call(this, parameters)
     cache.set(key, { value: result, timestamp: now })
+
+    if (
+      result !== null &&
+      (typeof result === 'object' || typeof result === 'function') &&
+      typeof (result as PromiseLike<TResult>).then === 'function'
+    ) {
+      Promise.resolve(result).then(
+        () => {
+          if (this.authenticated || this.isServer) {
+            if (cache.get(key)?.value === result) cache.delete(key)
+          }
+        },
+        () => {
+          if (cache.get(key)?.value === result) cache.delete(key)
+        },
+      )
+    }
+
     return result
   }
 }

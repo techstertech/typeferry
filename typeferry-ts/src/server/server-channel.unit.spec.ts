@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./methods', () => ({
   getRoomName: (channel: string, event: string) =>
-    `typeferry:${channel}:${event}`,
+    `typeferry:${Buffer.byteLength(channel, 'utf8')}:${channel}:${event}`,
 }))
 
 const mockEventInstances: any[] = []
@@ -128,7 +128,7 @@ describe('ServerChannel', () => {
       channel.propagate('my-event', '{"data":1}')
 
       expect(rooms.broadcast).toHaveBeenCalledWith(
-        'typeferry:test-channel:my-event',
+        'typeferry:12:test-channel:my-event',
         '{"data":1}',
       )
     })
@@ -144,7 +144,7 @@ describe('ServerChannel', () => {
       channel.propagate('my-event', '{"data":1}', 'client-uuid')
 
       expect(rooms.broadcast).toHaveBeenCalledWith(
-        'typeferry:test-channel:my-event',
+        'typeferry:12:test-channel:my-event',
         '{"data":1}',
         mockSocket,
       )
@@ -159,7 +159,7 @@ describe('ServerChannel', () => {
       channel.propagate('my-event', '{"data":1}', 'nonexistent-uuid')
 
       expect(rooms.broadcast).toHaveBeenCalledWith(
-        'typeferry:test-channel:my-event',
+        'typeferry:12:test-channel:my-event',
         '{"data":1}',
         undefined,
       )
@@ -343,7 +343,7 @@ describe('ServerChannel', () => {
 
       expect(rooms.has).toHaveBeenCalledWith(
         mockSocket,
-        'typeferry:test-channel:my-ev',
+        'typeferry:12:test-channel:my-ev',
       )
       expect(result).toBe(true)
     })

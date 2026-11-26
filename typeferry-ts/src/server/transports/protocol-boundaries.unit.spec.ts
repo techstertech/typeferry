@@ -1,3 +1,4 @@
+import { createConnection } from 'node:net'
 import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -477,6 +478,212 @@ it('retires user delivery membership when rpc:logout deauthenticates a client', 
     expect(server.getClientsByUserId('boundary-user').size).toBe(0)
   } finally {
     socket.close()
+    await server.close()
+  }
+})
+
+it('evicts room subscriptions on rpc:logout so protected and user events stop delivering', async () => {
+  const server = await startServer()
+
+  server.setAuth({
+    auth: async () => ({ user: { _id: 'boundary-user' } }),
+    logIn: async () => true,
+  })
+  server.addEvent('private:notice', { user: true })
+
+  const socket = new WebSocket(
+    `ws://${HOST}:${server.port}/typeferry-ws?token=identity`,
+  )
+
+  try {
+    expect(await nextFrame(socket)).toEqual({ t: 'auth', authenticated: true })
+
+    const subReply = nextFrame(socket)
+    socket.send(
+      Presentation.encode({
+        t: 'rpc',
+        id: 'sub-1',
+        method: 'rpc:on',
+        params: { events: ['private:notice'], channel: 'boundary-user' },
+      }),
+    )
+    expect(await subReply).toEqual({
+      t: 'rpc:res',
+      id: 'sub-1',
+      result: { 'private:notice': true },
+    })
+
+    const logoutReply = nextFrame(socket)
+    socket.send(
+      Presentation.encode({ t: 'rpc', id: 'logout-1', method: 'rpc:logout' }),
+    )
+    expect(await logoutReply).toEqual({
+      t: 'rpc:res',
+      id: 'logout-1',
+      result: true,
+    })
+
+    const unexpected = nextFrame(socket).then(
+      () => 'received',
+      () => 'none',
+    )
+    server.channel('boundary-user').emit('private:notice', { secret: true })
+    expect(await unexpected).toBe('none')
+  } finally {
+    socket.close()
+    await server.close()
+  }
+})
+
+it('rejects malformed WebSocket upgrade URLs with 400 instead of crashing', async () => {
+  const server = await startServer()
+
+  try {
+    const response = await new Promise<string>((resolve, reject) => {
+      let raw = ''
+      const conn = createConnection({ host: HOST, port: server.port })
+      conn.setEncoding('utf8')
+      conn.once('connect', () => {
+        conn.write(
+          'GET //a:b:c HTTP/1.1\r\n' +
+            `Host: ${HOST}:${server.port}\r\n` +
+            'Connection: Upgrade\r\n' +
+            'Upgrade: websocket\r\n' +
+            'Sec-WebSocket-Version: 13\r\n' +
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        )
+      })
+      conn.on('data', chunk => {
+        raw += chunk
+      })
+      conn.once('close', () => resolve(raw))
+      conn.once('error', reject)
+    })
+
+    expect(response).toContain('HTTP/1.1 400 Bad Request')
+  } finally {
+    await server.close()
+  }
+})
+
+it('does not leak authenticated HTTP ClientNodes in clientsByUserId', async () => {
+  const server = await startServer()
+  server.setAuth({
+    auth: async () => ({ user: { _id: 'http-user' } }),
+    logIn: async () => true,
+  })
+  server.addMethod('http:ping', async () => 'pong', { protected: true })
+
+  try {
+    const response = await fetch(`http://${HOST}:${server.port}/__h`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', 'x-api-key': 'Bearer tok' },
+      body: Presentation.encode({
+        context: {},
+        payload: { method: 'http:ping' },
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(server.getClientsByUserId('http-user').size).toBe(0)
+    expect(server.disconnectUser('http-user')).toBe(0)
+  } finally {
+    await server.close()
+  }
+})
+
+it('filters HTTP transport.context using allowedContextKeys', async () => {
+  const seenContexts: unknown[] = []
+  const restricted = await startServer()
+  restricted.setAuth({
+    auth: async (context) => {
+      seenContexts.push(context)
+      return context.token === 'tok' ? { ...context, user: { _id: 'u1' } } : false
+    },
+    logIn: async () => true,
+  })
+  restricted.addMethod(
+    'ctx:read',
+    function () {
+      return this.context
+    },
+    { protected: true },
+  )
+
+  const allowlisted = await startServer({ allowedContextKeys: ['locale'] })
+  allowlisted.setAuth({
+    auth: async (context) => {
+      seenContexts.push(context)
+      return context.token === 'tok' ? { ...context, user: { _id: 'u1' } } : false
+    },
+    logIn: async () => true,
+  })
+  allowlisted.addMethod(
+    'ctx:read',
+    function () {
+      return this.context
+    },
+    { protected: true },
+  )
+
+  try {
+    const res1 = await fetch(`http://${HOST}:${restricted.port}/__h`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', 'x-api-key': 'Bearer tok' },
+      body: Presentation.encode({
+        context: { role: 'admin', locale: 'en' },
+        payload: { method: 'ctx:read' },
+      }),
+    })
+    const body1 = Presentation.decode<{ result: Record<string, unknown> }>(
+      await res1.text(),
+    )
+    expect(body1.result['role']).toBeUndefined()
+    expect(body1.result['locale']).toBeUndefined()
+
+    const res2 = await fetch(`http://${HOST}:${allowlisted.port}/__h`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', 'x-api-key': 'Bearer tok' },
+      body: Presentation.encode({
+        context: { role: 'admin', locale: 'en' },
+        payload: { method: 'ctx:read' },
+      }),
+    })
+    const body2 = Presentation.decode<{ result: Record<string, unknown> }>(
+      await res2.text(),
+    )
+    expect(body2.result['role']).toBeUndefined()
+    expect(body2.result['locale']).toBe('en')
+  } finally {
+    await restricted.close()
+    await allowlisted.close()
+  }
+})
+
+it('does not allow unauthenticated WS UUID collision to overwrite or evict a live client', async () => {
+  const server = await startServer()
+  const victim = new WebSocket(
+    `ws://${HOST}:${server.port}/typeferry-ws?uuid=victim-id`,
+  )
+
+  try {
+    expect(await nextFrame(victim)).toEqual({ t: 'auth', authenticated: false })
+    const victimNode = server.allClients.get('victim-id')
+    expect(victimNode).toBeDefined()
+
+    const attacker = new WebSocket(
+      `ws://${HOST}:${server.port}/typeferry-ws?uuid=victim-id`,
+    )
+    expect(await nextFrame(attacker)).toEqual({
+      t: 'auth',
+      authenticated: false,
+    })
+    expect(server.allClients.get('victim-id')).toBe(victimNode)
+
+    attacker.close()
+    await new Promise(resolve => attacker.once('close', resolve))
+    expect(server.allClients.get('victim-id')).toBe(victimNode)
+  } finally {
+    victim.close()
     await server.close()
   }
 })

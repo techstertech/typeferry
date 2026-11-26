@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { ClientNode } from '../../server'
-import { ClientEvents, ServerEvents, sleep } from '../../utils'
+import { getRoomName, type ClientNode } from '../../server'
+import { ClientEvents, NO_CHANNEL, ServerEvents, sleep } from '../../utils'
 import { TestUtility } from '../test-utility'
 
 /** Retrieves a ClientNode by uuid, failing the test if not found. */
@@ -176,7 +176,7 @@ describe('Room Cleanup on Disconnect', () => {
     const rooms = server.webSocketTransport?.rooms
     expect(rooms).toBeDefined()
 
-    const roomName = 'typeferry:NO_CHANNEL:room:test-event'
+    const roomName = getRoomName(NO_CHANNEL, 'room:test-event')
     expect(rooms?.getRoomSize(roomName)).toBe(2)
 
     // Disconnect client1

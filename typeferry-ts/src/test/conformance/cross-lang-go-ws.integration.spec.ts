@@ -129,17 +129,14 @@ describe('TypeScript WebSocket client ↔ Go server', () => {
     }
   })
 
-  it('reconnects after duplicate UUID replacement and restores subscriptions', async () => {
+  it('preserves live client and subscriptions when a duplicate UUID connects unauthenticated', async () => {
     const client = await newClient()
     try {
       const channel = client.channel('room-reconnect')!
       await channel.subscribe('ping.tick')
-      const reinitialized = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Go reconnect timed out')), 5000)
-        client.once(ClientEvents.INITIALIZED, () => {
-          clearTimeout(timeout)
-          resolve()
-        })
+      let closed = false
+      client.once(ClientEvents.WEBSOCKET_CLOSED, () => {
+        closed = true
       })
       const duplicate = new WS(`ws://127.0.0.1:${port}/typeferry-ws?uuid=${client.uuid}`)
       duplicate.on('error', () => undefined)
@@ -147,8 +144,12 @@ describe('TypeScript WebSocket client ↔ Go server', () => {
         duplicate.once('open', () => resolve())
         duplicate.once('error', reject)
       })
-      await reinitialized
+      const authFrame = await new Promise<string>(resolve => {
+        duplicate.once('message', data => resolve(data.toString()))
+      })
+      expect(JSON.parse(authFrame)).toEqual({ t: 'auth', authenticated: false })
       duplicate.terminate()
+      expect(closed).toBe(false)
       const received = new Promise(resolve => channel.once('ping.tick', resolve))
       await client.call('emit_ping', { channel: 'room-reconnect', params: { n: 8 } })
       await expect(received).resolves.toEqual({ n: 8 })

@@ -412,4 +412,55 @@ describe('Methods', () => {
       })
     ).rejects.toThrow(Errors.INTERNAL_ERROR)
   })
+
+  it('does not cache rejected promises or server.call() invocations in anonymous cache', async () => {
+    let calls = 0
+    let shouldFail = true
+    test.server.addMethod(
+      'cache:hardened',
+      async function (params: { fail?: boolean }) {
+        calls++
+        if (this.isServer) return 'server-secret'
+        if (params?.fail && shouldFail) throw new PublicError('transient')
+        return `ok-${calls}`
+      },
+      { cache: true },
+    )
+
+    expect(await test.server.call('cache:hardened', { fail: false })).toBe(
+      'server-secret',
+    )
+    await expect(
+      test.client.call('cache:hardened', { fail: true }),
+    ).rejects.toMatchObject({ message: 'transient' })
+
+    shouldFail = false
+    const afterFailure = await test.client.call('cache:hardened', { fail: true })
+    expect(afterFailure).toBe('ok-3')
+    expect(await test.client.call('cache:hardened', { fail: false })).toBe(
+      'ok-4',
+    )
+  })
+
+  it('bounds anonymous method cache entries to prevent unbounded memory growth', async () => {
+    let calls = 0
+    test.server.addMethod(
+      'cache:bounded',
+      async (params: { i: number }) => {
+        calls++
+        return params.i
+      },
+      { cache: true },
+    )
+
+    const method = test.server.getMethod('cache:bounded')!
+    const anonNode = { authenticated: false, isServer: false, context: {} } as any
+    for (let i = 0; i < 1005; i++) {
+      await method.exec({ i }, anonNode)
+    }
+    expect(calls).toBe(1005)
+    // Entry i=0 was evicted after 1000 cap, so calling it again re-executes.
+    await method.exec({ i: 0 }, anonNode)
+    expect(calls).toBe(1006)
+  })
 })

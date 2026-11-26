@@ -20,7 +20,9 @@ function createMockRooms() {
   return {
     join: vi.fn(),
     leave: vi.fn(),
+    leaveAll: vi.fn(),
     has: vi.fn().mockReturnValue(false),
+    getSocketRoomCount: vi.fn().mockReturnValue(0),
   }
 }
 
@@ -57,13 +59,13 @@ function createMockEvent(
 describe('getRoomName', () => {
   it('combines channel and event name', () => {
     expect(getRoomName('my-channel', 'my-event')).toBe(
-      'typeferry:my-channel:my-event',
+      'typeferry:10:my-channel:my-event',
     )
   })
 
   it('works with NO_CHANNEL', () => {
     expect(getRoomName(NO_CHANNEL, 'event')).toBe(
-      `typeferry:${NO_CHANNEL}:event`,
+      `typeferry:${Buffer.byteLength(NO_CHANNEL, 'utf8')}:${NO_CHANNEL}:event`,
     )
   })
 })
@@ -86,7 +88,7 @@ describe('rpcOff', () => {
 
     expect(rooms.leave).toHaveBeenCalledWith(
       client.socket,
-      'typeferry:chan:test-event',
+      'typeferry:4:chan:test-event',
     )
     expect(result).toEqual({ 'test-event': true })
   })
@@ -147,7 +149,7 @@ describe('rpcOff', () => {
 
     expect(rooms.leave).toHaveBeenCalledWith(
       client.socket,
-      `typeferry:${NO_CHANNEL}:ev`,
+      `typeferry:${Buffer.byteLength(NO_CHANNEL, 'utf8')}:${NO_CHANNEL}:ev`,
     )
   })
 })
@@ -172,7 +174,7 @@ describe('rpcOn', () => {
 
     expect(rooms.join).toHaveBeenCalledWith(
       client.socket,
-      'typeferry:chan:my-ev',
+      'typeferry:4:chan:my-ev',
     )
     expect(result).toEqual({ 'my-ev': true })
   })
@@ -321,7 +323,7 @@ describe('rpcOn', () => {
 
     expect(rooms.join).toHaveBeenCalledWith(
       client.socket,
-      `typeferry:${NO_CHANNEL}:ev`,
+      `typeferry:${Buffer.byteLength(NO_CHANNEL, 'utf8')}:${NO_CHANNEL}:ev`,
     )
   })
 })
@@ -350,5 +352,52 @@ describe('rpcLogout', () => {
     const server = createMockServer()
     const method = rpcLogout(server as any, 'rpc:logout')
     expect(method.isProtected).toBe(true)
+  })
+
+  it('leaves all subscribed WebSocket rooms on logout', async () => {
+    const server = createMockServer()
+    const method = rpcLogout(server as any, 'rpc:logout')
+    const socket = { readyState: 1 }
+    const client = {
+      socket,
+      context: { user: { _id: '123' } },
+      authenticated: true,
+      userId: '123',
+    }
+
+    await method.fn.call(client as any, undefined)
+
+    expect(server.webSocketTransport.rooms.leaveAll).toHaveBeenCalledWith(
+      socket,
+    )
+  })
+})
+
+describe('room isolation and subscription bounds', () => {
+  it('separates colon-containing channels from colon-containing event names', () => {
+    expect(getRoomName('user:42', 'alert')).not.toBe(
+      getRoomName('user', '42:alert'),
+    )
+  })
+
+  it('rejects non-string channels and bounds event batch and socket room counts', async () => {
+    const server = createMockServer()
+    server.events.set('ev', createMockEvent('ev'))
+    server.webSocketTransport.rooms.getSocketRoomCount.mockReturnValue(1024)
+
+    const method = rpcOn(server as any, 'rpc:on')
+    const client = { socket: { readyState: 1 }, authenticated: true }
+
+    const arrayChannel = await method.fn.call(client as any, {
+      events: ['ev'],
+      channel: ['admin'],
+    })
+    expect(arrayChannel).toEqual({})
+
+    const capped = await method.fn.call(client as any, {
+      events: ['ev'],
+      channel: 'valid',
+    })
+    expect(capped).toEqual({ ev: false })
   })
 })
