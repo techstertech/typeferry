@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: verified
 created: 2026-11-26
 updated: 2026-11-26
 owner: security-hardening
@@ -69,14 +69,40 @@ The user approved the following choices (`1a; 2a; 3a`) on 2026-11-26:
 
 ## Execution checklist
 
-- [x] Unit 1: Create spec and update `PROTOCOL.md`.
-- [ ] Unit 2: TypeScript P2 hardening & unit tests (`typeferry-ts`).
-- [ ] Unit 3: Go P2 hardening/parity & race tests (`typeferry-go`).
-- [ ] Unit 4: Python P2 hardening/parity & pytest/ruff/mypy (`typeferry-py`).
-- [ ] Unit 5: Rust P2 hardening/parity & cargo workspace checks (`typeferry-rs`).
-- [ ] Unit 6: CI workflow expansion (`.github/workflows/ci.yml`).
-- [ ] Unit 7: Cross-language verification, Rust `target/` cleanup, spec completion.
+- [x] Unit 1: Create spec and update `PROTOCOL.md` (`a8c6442`).
+- [x] Unit 2: TypeScript P2 hardening & unit tests (`1fd7a8d`).
+- [x] Unit 3: Go P2 hardening/parity & race tests (`babc4e1`).
+- [x] Unit 4: Python P2 hardening/parity & pytest/ruff/mypy (`f342510`).
+- [x] Unit 5: Rust P2 hardening/parity & cargo workspace checks (`e2a6aa4`).
+- [x] Unit 6: CI workflow expansion (`.github/workflows/ci.yml`, `c146d03`).
+- [x] Unit 7: Cross-language verification, Rust `target/` cleanup (`cargo clean`), spec completion.
 
 ## Verification record
 
-*Pending execution.*
+### Commits
+- `a8c6442` `docs(protocol): specify P2 security hardening, Redis HMAC signing, and parity`
+- `1fd7a8d` `fix(ts): add HTTP auth timeout, WS caps, Redis HMAC, and JWT/EJSON bounds`
+- `babc4e1` `fix(go): add query-token opt-out, revalidateOnDelivery, and Redis HMAC signing`
+- `f342510` `fix(py): add HTTP auth timeout, revalidateOnDelivery, sensitive telemetry, and Redis HMAC`
+- `e2a6aa4` `fix(rs): add HTTP/WS rate limits, handshake auth, revalidateOnDelivery, Redis HMAC, and EJSON bounds`
+- `c146d03` `ci: add Python, Rust, and template jobs to GitHub Actions workflow`
+
+### Executed checks
+- **`typeferry-ts`:**
+  - `node ./node_modules/.bin/tsc --noEmit` and `node ./node_modules/.bin/eslint src/`: exited 0.
+  - Full unit run before final 1-line `pongReceived` key fix: 142/143 files / 1869/1870 passed (confirming `1 MiB` default `maxPayload` broke zero existing unit tests); after fix, `src/server/transports/websocket-transport.unit.spec.ts` passed 31/31. (Note: `redis-transport.unit.spec.ts` mocked `redis`'s `createClient` to unit-test envelope validation, HMAC signing, and transient channel propagation without a live Redis server.)
+  - `src/test/conformance/ejson-fixtures.unit.spec.ts`: 38/38 passed.
+  - Shared integration & cross-language suites (`http-fixtures`, `ws-fixtures`, `cross-lang` Py, `cross-lang-go-http`, `cross-lang-go-ws`, `cross-lang-rs`): 6/6 files, 61/61 tests passed.
+  - `tsc -p tsconfig.build.json && node scripts/prepare-dist.mjs`: exited 0.
+- **`typeferry-go`:**
+  - `/opt/homebrew/bin/gofmt -l .` (empty), `go vet ./...` (exit 0), `go test -race -count=1 ./...` (Go 1.27): all 7 tested packages passed (`TestRedisCrossInstanceDelivery` skipped with `TYPEFERRY_TEST_REDIS_URL` unset).
+- **`typeferry-py`:**
+  - `.venv/bin/python -m ruff check .` (exit 0), `.venv/bin/python -m mypy` (0 issues in 53 source files), `.venv/bin/python -m pytest` (347/347 passed).
+- **`typeferry-rs`:**
+  - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`: all exited 0 across all workspace crates (1 pre-existing ignored doctest in `typeferry-macros`; Redis live lifecycle test requires external `REDIS_URL`). Cleaned `typeferry-rs/target` (`2.6GiB`) via `cargo clean`.
+- **`.github/workflows/ci.yml`:**
+  - `ruby -ryaml -e 'YAML.load_file(".github/workflows/ci.yml")'` exited 0; live GitHub Actions execution happens on push/PR.
+
+### Skipped / environmental limits
+- Live external MongoDB/Redis integration suites, Playwright browser tests, and local `template/` CI steps were not run in this session.
+- `npm` CLI wrapper in `typeferry-ts/` was bypassed in favor of direct `node ./node_modules/.bin/*` invocations because local `node` (`v24.22.0`) mismatches `devEngines` (`24.19.0`).
