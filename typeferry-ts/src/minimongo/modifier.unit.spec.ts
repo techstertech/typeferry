@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { LocalCollectionError } from './errors'
 import { createUpsertDocument, modifyDocument } from './modifier'
+import { deletePath, setPath } from './path'
 
 interface MutableDocument extends Record<string, unknown> {
   _id: string
@@ -74,5 +75,27 @@ describe('modifyDocument', () => {
     )
 
     expect(result).toEqual({ owner: 'one', count: 2, active: true, created: 'now' })
+  })
+
+  it('rejects prototype pollution segments in setPath, deletePath, modifiers, and upserts', () => {
+    const proto = Object.prototype as Record<string, unknown>
+
+    expect(() => setPath({}, '__proto__.polluted', true)).toThrow()
+    expect(() => setPath({}, 'constructor.prototype.polluted', true)).toThrow()
+    expect(() => deletePath({}, '__proto__.toString')).toThrow()
+    expect(() =>
+      modifyDocument(document(), { $set: { '__proto__.polluted': true } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      modifyDocument(document(), { $inc: { 'constructor.prototype.polluted': 1 } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      modifyDocument(document(), { $rename: { count: '__proto__.polluted' } }),
+    ).toThrow(LocalCollectionError)
+    expect(() =>
+      createUpsertDocument({ '__proto__.polluted': true }, { $set: { ok: 1 } }),
+    ).toThrow()
+
+    expect(proto['polluted']).toBeUndefined()
   })
 })

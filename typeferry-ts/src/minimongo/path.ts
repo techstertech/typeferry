@@ -4,8 +4,23 @@ export interface ValueBranch {
   readonly arrayIndices?: readonly (number | 'x')[]
 }
 
+export const FORBIDDEN_PATH_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+export function assertSafePathSegment(segment: string): void {
+  if (FORBIDDEN_PATH_KEYS.has(segment)) {
+    throw new Error(`Forbidden path segment: ${segment}`)
+  }
+}
+
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    value === Object.prototype
+  ) {
+    return false
+  }
   const prototype = Object.getPrototypeOf(value) as object | null
 
   return prototype === Object.prototype || prototype === null
@@ -43,6 +58,7 @@ function branchAt(
   })
 
   if (part === undefined) return [branch(current)]
+  if (FORBIDDEN_PATH_KEYS.has(part)) return [branch(undefined)]
   if (!isPlainObject(current) && !Array.isArray(current)) return [branch(undefined)]
 
   if (Array.isArray(current)) {
@@ -57,7 +73,7 @@ function branchAt(
     return branchAt(value, rest, nextIndices, forSort)
   }
 
-  const value = current[part]
+  const value = Object.hasOwn(current, part) ? current[part] : undefined
   if (rest.length === 0) return [branch(value)]
   if (!isPlainObject(value) && !Array.isArray(value)) return [branch(undefined)]
 
@@ -105,8 +121,9 @@ export function expandArrays(
 export function getPath(document: unknown, path: string): unknown {
   let current = document
   for (const part of path.split('.')) {
+    if (FORBIDDEN_PATH_KEYS.has(part)) return undefined
     if (!isPlainObject(current) && !Array.isArray(current)) return undefined
-    current = Reflect.get(current, part) as unknown
+    current = Object.hasOwn(current, part) ? (Reflect.get(current, part) as unknown) : undefined
   }
 
   return current
@@ -114,12 +131,13 @@ export function getPath(document: unknown, path: string): unknown {
 
 export function setPath(document: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.')
+  for (const part of parts) assertSafePathSegment(part)
   const finalPart = parts.pop()
   if (!finalPart) return
 
   let current: Record<string, unknown> = document
   for (const part of parts) {
-    const existing = current[part]
+    const existing = Object.hasOwn(current, part) ? current[part] : undefined
     if (isPlainObject(existing)) {
       current = existing
     } else {
@@ -133,13 +151,14 @@ export function setPath(document: Record<string, unknown>, path: string, value: 
 
 export function deletePath(document: Record<string, unknown>, path: string): void {
   const parts = path.split('.')
+  for (const part of parts) assertSafePathSegment(part)
   const finalPart = parts.pop()
   if (!finalPart) return
 
   let current: unknown = document
   for (const part of parts) {
     if (!isPlainObject(current) && !Array.isArray(current)) return
-    current = Reflect.get(current, part) as unknown
+    current = Object.hasOwn(current, part) ? (Reflect.get(current, part) as unknown) : undefined
   }
   if (Array.isArray(current) && isNumericKey(finalPart)) {
     if (Number(finalPart) in current) current[Number(finalPart)] = null

@@ -1,6 +1,12 @@
 import { LocalCollectionError as LocalCollectionError } from './errors'
 import { Matcher } from './matcher'
-import { isNumericKey, isOperatorObject, isPlainObject, setPath } from './path'
+import {
+  FORBIDDEN_PATH_KEYS,
+  isNumericKey,
+  isOperatorObject,
+  isPlainObject,
+  setPath,
+} from './path'
 import { Sorter } from './sorter'
 import type { Modifier } from './types'
 import { localValueSemantics, type ValueSemantics } from './value-semantics'
@@ -16,9 +22,11 @@ const INVALID_FIELD_NAME_MESSAGES = {
   dot: "start or end with '.'",
   doubleDot: 'contain consecutive dots',
   nullByte: 'contain null bytes',
+  prototypeKey: 'use a reserved prototype property name',
 } as const
 
 function invalidFieldNameReason(key: string): string | undefined {
+  if (FORBIDDEN_PATH_KEYS.has(key)) return INVALID_FIELD_NAME_MESSAGES.prototypeKey
   if (key.startsWith('$')) return INVALID_FIELD_NAME_MESSAGES.dollar
   if (key.startsWith('.') || key.endsWith('.')) return INVALID_FIELD_NAME_MESSAGES.dot
   if (key.includes('..')) return INVALID_FIELD_NAME_MESSAGES.doubleDot
@@ -59,6 +67,9 @@ function modificationTarget(
   const parts = path.split('.')
   const field = parts.pop()
   if (!field) throw new LocalCollectionError('Invalid empty update path', { field: path })
+  if (FORBIDDEN_PATH_KEYS.has(field) || parts.some(part => FORBIDDEN_PATH_KEYS.has(part))) {
+    throw new LocalCollectionError('Prototype pollution path segments are not allowed', { field: path })
+  }
   const positional = [...(options.arrayIndices ?? [])].filter(value => value !== 'x')
   let current: Record<string, unknown> | unknown[] = document
 
@@ -74,7 +85,7 @@ function modificationTarget(
     if (options.forbidArray && Array.isArray(current)) {
       throw new LocalCollectionError('The source field cannot be an array element', { field: path })
     }
-    const existing = Reflect.get(current, part) as unknown
+    const existing: unknown = Object.hasOwn(current, part) ? Reflect.get(current, part) : undefined
     if (isPlainObject(existing) || Array.isArray(existing)) {
       current = existing
       continue

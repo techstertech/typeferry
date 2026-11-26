@@ -66,7 +66,14 @@ function bitMask(operand: unknown, operator: string): Uint8Array {
   }
   if (operand instanceof Uint8Array) return operand
   if (Array.isArray(operand) && operand.every(value => Number.isInteger(value) && value >= 0)) {
-    const maximum = operand.length ? Math.max(...operand) : 0
+    const MAX_BIT_POSITION = 4096
+    let maximum = 0
+    for (const position of operand) {
+      if (position > MAX_BIT_POSITION) {
+        throw new LocalQueryError(`operand to ${operator} bit position must not exceed ${MAX_BIT_POSITION}`)
+      }
+      if (position > maximum) maximum = position
+    }
     const result = new Uint8Array((maximum >> 3) + 1)
     for (const position of operand) result[position >> 3] = (result[position >> 3] ?? 0) | (1 << (position & 7))
 

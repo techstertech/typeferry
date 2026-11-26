@@ -51,6 +51,12 @@ describe('Matcher', () => {
       'Unrecognized logical operator: $where',
     )
   })
+
+  it('rejects oversized bitmask positions in $bits* operators', () => {
+    expect(() => new Matcher({ score: { $bitsAnySet: [0x7fffffff] } })).toThrow(
+      LocalQueryError,
+    )
+  })
 })
 
 describe('Sorter and projection', () => {
