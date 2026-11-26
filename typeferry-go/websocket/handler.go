@@ -3,8 +3,10 @@ package websocket
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,12 +29,14 @@ type Options struct {
 	// Origins is unrestricted when nil; a non-nil empty slice denies named origins.
 	Origins []string
 	// AllowOriginless admits missing Origin headers only for this WebSocket handler.
-	AllowOriginless  bool
-	Authenticate     HandshakeAuthenticator
-	MaxMessageBytes  int64
-	DisableRateLimit bool
-	RateLimitMax     int
-	RateLimitWindow  time.Duration
+	AllowOriginless bool
+	// DisableQueryToken ignores ?token= query parameter authentication when true.
+	DisableQueryToken bool
+	Authenticate      HandshakeAuthenticator
+	MaxMessageBytes   int64
+	DisableRateLimit  bool
+	RateLimitMax      int
+	RateLimitWindow   time.Duration
 }
 
 type Handler struct {
@@ -48,6 +52,9 @@ type Handler struct {
 }
 
 func New(server *runtime.Server, options Options) *Handler {
+	if options.Origins == nil && isProductionEnv() {
+		log.Printf("[TypeFerry] WebSocket transport started without an origins allowlist in production")
+	}
 	var origins map[string]struct{}
 	if options.Origins != nil {
 		origins = make(map[string]struct{}, len(options.Origins))
@@ -142,6 +149,9 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		}
 	}
 	dispatcher := NewDispatcher(handler.server, socket, query, handler.options.Authenticate)
+	if handler.options.DisableQueryToken {
+		dispatcher.SetDisableQueryToken(true)
+	}
 	if !handler.options.DisableRateLimit {
 		rateMax := handler.options.RateLimitMax
 		if rateMax <= 0 {
@@ -227,6 +237,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 			return
 		}
 	}
+}
+
+func isProductionEnv() bool {
+	for _, key := range []string{"TYPEFERRY_ENV", "NODE_ENV", "GO_ENV"} {
+		if os.Getenv(key) == "production" {
+			return true
+		}
+	}
+	return false
 }
 
 func (handler *Handler) pingLoop(ctx context.Context, dispatcher *Dispatcher) {

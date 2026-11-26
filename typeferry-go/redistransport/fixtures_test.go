@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/leonardoventurini/typeferry/typeferry-go/runtime"
@@ -90,5 +91,53 @@ func TestClusterAdapterPublishes(t *testing.T) {
 	route, err := ParseEnvelope(fake.payload)
 	if err != nil || route.ExcludeUUID != "peer" {
 		t.Fatalf("route = %#v, %v", route, err)
+	}
+}
+
+func TestRedisHMACSigningAndStrictValidation(t *testing.T) {
+	const secret = "test-secret"
+	if got := FormatSigningInput("chat.message", "room-a", `{"t":"event"}`, "orig-1"); got != `12:chat.message|6:room-a|13:{"t":"event"}|6:orig-1` {
+		t.Fatalf("signing input = %q", got)
+	}
+	_, payload, err := PublishEnvelopeSigned("chat.message", "room-a", `{"t":"event"}`, "orig-1", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["sig"] != "2fe864725cc91a1de99652933920ffbd5bd716753b3b4a155584e49ea0d4fed0" {
+		t.Fatalf("sig = %v", decoded["sig"])
+	}
+	env, err := ParseEnvelopeSigned(payload, secret)
+	if err != nil || env.Event != "chat.message" || env.ExcludeUUID != "orig-1" {
+		t.Fatalf("ParseEnvelopeSigned = %#v, %v", env, err)
+	}
+
+	if _, err := ParseEnvelopeSigned(`{"event":"chat.message","channel":"room-a","message":"{}"}`, secret); err == nil {
+		t.Fatal("expected missing sig to fail")
+	}
+	if _, err := ParseEnvelopeSigned(strings.Replace(payload, "chat.message", "chat.evil", 1), secret); err == nil {
+		t.Fatal("expected tampered payload to fail HMAC verification")
+	}
+	if _, err := ParseEnvelopeSigned(`{"event":"chat.message","channel":123,"message":"{}"}`, ""); err == nil {
+		t.Fatal("expected non-string channel to be rejected")
+	}
+	if _, err := ParseEnvelopeSigned(`{"event":"chat.message","channel":"room-a","message":"{}","excludeUuid":42}`, ""); err == nil {
+		t.Fatal("expected non-string excludeUuid to be rejected")
+	}
+
+	server := runtime.NewServer()
+	fake := &fakePublisher{}
+	adapter := NewWithOptions(server, fake, Options{SigningSecret: secret})
+	if err := adapter.Publish(context.Background(), "chat.message", "room-a", `{"t":"event"}`, "orig-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Receive(context.Background(), fake.payload); err != nil {
+		t.Fatalf("adapter.Receive signed payload failed: %v", err)
+	}
+	if err := adapter.Receive(context.Background(), `{"event":"chat.message","channel":"room-a","message":"{}"}`); err == nil {
+		t.Fatal("adapter.Receive should reject unsigned payload when SigningSecret is configured")
 	}
 }

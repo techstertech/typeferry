@@ -29,6 +29,10 @@ type Client struct {
 }
 
 func Connect(ctx context.Context, server *runtime.Server, options *redis.Options) (*Client, error) {
+	return ConnectWithOptions(ctx, server, options, Options{})
+}
+
+func ConnectWithOptions(ctx context.Context, server *runtime.Server, options *redis.Options, transportOptions Options) (*Client, error) {
 	if server == nil || options == nil {
 		return nil, errors.New("Redis transport requires a server and options")
 	}
@@ -53,7 +57,7 @@ func Connect(ctx context.Context, server *runtime.Server, options *redis.Options
 		presenceDone:   make(chan struct{}),
 	}
 	client.server = server
-	client.adapter = New(server, client)
+	client.adapter = NewWithOptions(server, client, transportOptions)
 	if err := pub.SAdd(ctx, "typeferry:servers", server.ID()).Err(); err != nil {
 		server.SetEventPublisher(nil)
 		cancel()

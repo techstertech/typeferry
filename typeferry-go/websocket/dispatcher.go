@@ -31,15 +31,16 @@ type HandshakeAuthenticator func(context.Context, *runtime.Client, Handshake) (e
 // Dispatcher owns one connection's protocol state. The socket must serialize
 // concurrent writes; the HTTP adapter provides that guarantee.
 type Dispatcher struct {
-	server      *runtime.Server
-	socket      runtime.Socket
-	client      *runtime.Client
-	query       map[string]string
-	handshake   Handshake
-	auth        HandshakeAuthenticator
-	pendingPing atomic.Bool
-	limit       *rateLimiter
-	authTimeout time.Duration
+	server            *runtime.Server
+	socket            runtime.Socket
+	client            *runtime.Client
+	query             map[string]string
+	handshake         Handshake
+	auth              HandshakeAuthenticator
+	disableQueryToken bool
+	pendingPing       atomic.Bool
+	limit             *rateLimiter
+	authTimeout       time.Duration
 
 	lifecycle sync.Mutex
 	closing   bool
@@ -97,6 +98,10 @@ func (dispatcher *Dispatcher) SetHandshake(handshake Handshake) {
 	dispatcher.handshake = handshake
 }
 
+func (dispatcher *Dispatcher) SetDisableQueryToken(disable bool) {
+	dispatcher.disableQueryToken = disable
+}
+
 func (dispatcher *Dispatcher) Open(ctx context.Context) error {
 	dispatcher.lifecycle.Lock()
 	if dispatcher.closing {
@@ -104,7 +109,11 @@ func (dispatcher *Dispatcher) Open(ctx context.Context) error {
 		return net.ErrClosed
 	}
 	dispatcher.server.AddWebSocketClient(dispatcher.client)
-	if dispatcher.auth == nil && (!dispatcher.server.HasAuth() || dispatcher.query["token"] == "") {
+	token := ""
+	if !dispatcher.disableQueryToken {
+		token = dispatcher.query["token"]
+	}
+	if dispatcher.auth == nil && (!dispatcher.server.HasAuth() || token == "") {
 		dispatcher.lifecycle.Unlock()
 		return dispatcher.send(ctx, ejson.Field{Key: "t", Value: ejson.String(protocol.MessageAuth)}, ejson.Field{Key: "authenticated", Value: ejson.Bool(false)})
 	}
@@ -135,7 +144,7 @@ func (dispatcher *Dispatcher) Open(ctx context.Context) error {
 			value.identity, value.err = dispatcher.auth(authCtx, dispatcher.client, dispatcher.handshake)
 			return
 		}
-		value.identity, value.err = dispatcher.server.AuthenticateValue(authCtx, dispatcher.client, ejson.Object(ejson.Field{Key: "token", Value: ejson.String(dispatcher.query["token"])}))
+		value.identity, value.err = dispatcher.server.AuthenticateValue(authCtx, dispatcher.client, ejson.Object(ejson.Field{Key: "token", Value: ejson.String(token)}))
 	}()
 	select {
 	case <-authCtx.Done():

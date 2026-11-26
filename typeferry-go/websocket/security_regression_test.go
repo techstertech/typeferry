@@ -1,9 +1,11 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -412,5 +414,68 @@ func TestWSRPCSlotsSaturationDoesNotBlockPingPong(t *testing.T) {
 		if strings.Contains(text, `"t":"pong"`) {
 			sawPong = true
 		}
+	}
+}
+
+func TestWSDisableQueryTokenAndProductionOriginWarning(t *testing.T) {
+	t.Setenv("TYPEFERRY_ENV", "production")
+	var logs bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prevOut)
+
+	server := runtime.NewServer()
+	_ = server.SetAuth(func(_ context.Context, _ *runtime.Client, ctx ejson.Value) (ejson.Value, error) {
+		tokenVal, _ := ctx.Lookup("token")
+		if text, _ := tokenVal.Text(); text == "query-secret" {
+			return ejson.Object(ejson.Field{Key: "user", Value: ejson.Object(ejson.Field{Key: "_id", Value: ejson.String("q1")})}), nil
+		}
+		return ejson.Null(), nil
+	}, func(context.Context, *runtime.Client, ejson.Value) (ejson.Value, error) {
+		return ejson.Null(), nil
+	})
+
+	handler := New(server, Options{DisableQueryToken: true})
+	defer handler.Close()
+	if !strings.Contains(logs.String(), "without an origins allowlist") {
+		t.Fatalf("expected production omitted-origins warning, got %q", logs.String())
+	}
+
+	host := httptest.NewServer(handler)
+	defer host.Close()
+	wsURL := "ws" + strings.TrimPrefix(host.URL, "http") + "/typeferry-ws?token=query-secret"
+	conn, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	_, frame, err := conn.Read(context.Background())
+	if err != nil || !strings.Contains(string(frame), `"authenticated":false`) {
+		t.Fatalf("expected query token auth disabled, got %s err=%v", frame, err)
+	}
+
+	authHandler := New(server, Options{
+		DisableQueryToken: true,
+		Authenticate: func(_ context.Context, _ *runtime.Client, h Handshake) (ejson.Value, error) {
+			if h.Headers["cookie"] == "sid=ok" {
+				return ejson.Object(ejson.Field{Key: "user", Value: ejson.Object(ejson.Field{Key: "_id", Value: ejson.String("c1")})}), nil
+			}
+			return ejson.Null(), nil
+		},
+	})
+	defer authHandler.Close()
+	authHost := httptest.NewServer(authHandler)
+	defer authHost.Close()
+	authWSURL := "ws" + strings.TrimPrefix(authHost.URL, "http") + "/typeferry-ws?token=query-secret"
+	conn2, _, err := websocket.Dial(context.Background(), authWSURL, &websocket.DialOptions{
+		HTTPHeader: map[string][]string{"Cookie": {"sid=ok"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.CloseNow()
+	_, frame2, err := conn2.Read(context.Background())
+	if err != nil || !strings.Contains(string(frame2), `"authenticated":true`) {
+		t.Fatalf("expected handshake authenticator to succeed with DisableQueryToken, got %s err=%v", frame2, err)
 	}
 }

@@ -345,3 +345,52 @@ func TestCacheCoalescedWaiterIgnoresElevatedLeaderAndLogoutClearsAuthFirst(t *te
 		t.Fatalf("coalesced waiter received elevated leader result %q", ws)
 	}
 }
+
+func TestRevalidateOnDeliveryRechecksAuthorizationAndEvictsRevokedSubscriber(t *testing.T) {
+	server := NewServer()
+	allowSubscribe := true
+	if err := server.AddEvent("secret.tick", EventOptions{
+		Protected:            true,
+		RevalidateOnDelivery: true,
+		ShouldSubscribe: func(client *Client, _ string, _ string) bool {
+			return allowSubscribe && client.Authenticated()
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sock := &recordingSocket{}
+	client := NewClient("sub-1")
+	client.SetAuthenticated(true)
+	client.SetSocket(sock)
+	server.AddClient(client)
+
+	res, err := server.Call(context.Background(), protocol.MethodOn, ejson.Object(
+		ejson.Field{Key: "events", Value: ejson.Array(ejson.String("secret.tick"))},
+		ejson.Field{Key: "channel", Value: ejson.String("room-a")},
+	), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if okVal, _ := res.Lookup("secret.tick"); func() bool { b, ok := okVal.Boolean(); return !ok || !b }() {
+		t.Fatalf("expected subscription to succeed")
+	}
+
+	if err := server.EmitEvent(context.Background(), "secret.tick", "room-a", ejson.String("one")); err != nil {
+		t.Fatal(err)
+	}
+	if len(sock.sent) != 1 {
+		t.Fatalf("expected initial delivery, got %d", len(sock.sent))
+	}
+
+	allowSubscribe = false
+	if err := server.EmitEvent(context.Background(), "secret.tick", "room-a", ejson.String("two")); err != nil {
+		t.Fatal(err)
+	}
+	if len(sock.sent) != 1 {
+		t.Fatalf("expected revoked subscriber not to receive event, got %d", len(sock.sent))
+	}
+	if size := server.RoomSize("room-a", "secret.tick"); size != 0 {
+		t.Fatalf("expected revoked subscriber to be evicted from room, size = %d", size)
+	}
+}

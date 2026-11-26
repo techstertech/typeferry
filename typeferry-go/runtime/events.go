@@ -17,11 +17,12 @@ type Socket interface {
 }
 
 type EventOptions struct {
-	Protected         bool
-	User              bool
-	Cluster           bool
-	ExcludeOriginator bool
-	ShouldSubscribe   func(*Client, string, string) bool
+	Protected            bool
+	User                 bool
+	Cluster              bool
+	ExcludeOriginator    bool
+	RevalidateOnDelivery bool
+	ShouldSubscribe      func(*Client, string, string) bool
 }
 
 // EventPublisher carries cluster events to a transport such as Redis.
@@ -449,7 +450,7 @@ func (server *Server) EmitEvent(ctx context.Context, name, channel string, param
 	if entry.options.Cluster && publisher != nil {
 		return publisher.Publish(ctx, name, channel, frame, exclude)
 	}
-	return server.deliver(ctx, clients, frame, exclude)
+	return server.deliverEvent(ctx, entry, name, channel, frame, exclude)
 }
 
 // PropagateEvent delivers a cluster frame locally without publishing it again.
@@ -459,12 +460,99 @@ func (server *Server) PropagateEvent(ctx context.Context, name, channel, frame, 
 		server.mu.RUnlock()
 		return ErrClosed
 	}
+	entry := server.events[name]
 	clients := make([]*Client, 0, len(server.rooms[roomName(channel, name)]))
 	for client := range server.rooms[roomName(channel, name)] {
 		clients = append(clients, client)
 	}
 	server.mu.RUnlock()
-	return server.deliver(ctx, clients, frame, exclude)
+	return server.deliverEvent(ctx, entry, name, channel, frame, exclude)
+}
+
+func (server *Server) deliverEvent(ctx context.Context, entry *event, name, channel, frame, exclude string) error {
+	if entry == nil || !entry.options.RevalidateOnDelivery {
+		return server.deliver(ctx, func() []*Client {
+			server.mu.RLock()
+			defer server.mu.RUnlock()
+			room := server.rooms[roomName(channel, name)]
+			clients := make([]*Client, 0, len(room))
+			for client := range room {
+				clients = append(clients, client)
+			}
+			return clients
+		}(), frame, exclude)
+	}
+
+	room := roomName(channel, name)
+	server.mu.RLock()
+	if server.closed {
+		server.mu.RUnlock()
+		return ErrClosed
+	}
+	clients := make([]*Client, 0, len(server.rooms[room]))
+	for client := range server.rooms[room] {
+		clients = append(clients, client)
+	}
+	server.mu.RUnlock()
+
+	var failures []error
+	for _, client := range clients {
+		if client.ID() == exclude {
+			continue
+		}
+		allowed := server.revalidateSubscriber(entry, name, channel, room, client)
+		if !allowed {
+			continue
+		}
+		if socket := client.Socket(); socket != nil {
+			if err := socket.SendText(ctx, frame); err != nil {
+				failures = append(failures, err)
+			}
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (server *Server) revalidateSubscriber(entry *event, name, channel, room string, client *Client) bool {
+	userID := client.UserID()
+	server.mu.RLock()
+	channelAuthorization := server.channelAuthorization
+	registered := !server.closed && server.events[name] == entry && server.clients[client.ID()] == client
+	server.mu.RUnlock()
+
+	allowed := registered && client.Socket() != nil
+	if allowed && channelAuthorization != nil {
+		allowed = channelAuthorization(client, channel)
+	}
+	if allowed && (entry.options.Protected || entry.options.User) && !client.Authenticated() {
+		allowed = false
+	}
+	if allowed && entry.options.User && entry.options.ShouldSubscribe == nil && channel != userID {
+		allowed = false
+	}
+	if allowed && entry.options.ShouldSubscribe != nil {
+		allowed = entry.options.ShouldSubscribe(client, name, channel)
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.closed || server.events[name] != entry || server.clients[client.ID()] != client {
+		return false
+	}
+	if _, inRoom := server.rooms[room][client]; !inRoom {
+		return false
+	}
+	if allowed && (entry.options.Protected || entry.options.User) && !client.Authenticated() {
+		allowed = false
+	}
+	if allowed && client.UserID() != userID {
+		allowed = false
+	}
+	if !allowed {
+		server.leaveLocked(client, room)
+		return false
+	}
+	return true
 }
 
 func (server *Server) deliver(ctx context.Context, clients []*Client, frame, exclude string) error {

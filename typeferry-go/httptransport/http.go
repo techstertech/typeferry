@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -108,6 +109,9 @@ type Handler struct {
 }
 
 func New(server *runtime.Server, options Options) *Handler {
+	if options.Origins == nil && isProductionEnv() {
+		log.Printf("[TypeFerry] HTTP transport started without an origins allowlist in production")
+	}
 	if options.MaxBodyBytes <= 0 {
 		options.MaxBodyBytes = defaultBodyLimit
 	}
@@ -188,6 +192,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	handler.dispatch(response, request, address, string(body))
+}
+
+func isProductionEnv() bool {
+	for _, key := range []string{"TYPEFERRY_ENV", "NODE_ENV", "GO_ENV"} {
+		if os.Getenv(key) == "production" {
+			return true
+		}
+	}
+	return false
 }
 
 func (handler *Handler) originAllowed(origin string, present bool) bool {

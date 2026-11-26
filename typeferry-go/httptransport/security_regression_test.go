@@ -1,7 +1,9 @@
 package httptransport
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -145,5 +147,18 @@ func TestHTTPContextAllowlistHeadersTimeoutAndChunkedLimit(t *testing.T) {
 	_ = chunkResp.Body.Close()
 	if chunkResp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("chunked oversized status = %d, want 413", chunkResp.StatusCode)
+	}
+}
+
+func TestHTTPProductionOriginWarning(t *testing.T) {
+	t.Setenv("NODE_ENV", "production")
+	var logs bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prevOut)
+
+	_ = New(runtime.NewServer(), Options{})
+	if !strings.Contains(logs.String(), "without an origins allowlist") {
+		t.Fatalf("expected HTTP omitted-origins warning, got %q", logs.String())
 	}
 }
