@@ -30,8 +30,23 @@ export function convertMapToObject<TKey extends PropertyKey, TValue>(
   return result
 }
 
+export const MAX_EJSON_DEPTH = 128
+
+export function defineOwnProperty(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+}
+
 export const isArguments = (value: unknown): value is IArguments =>
-  value !== null && typeof value === 'object' && hasOwn(value, 'callee')
+  Object.prototype.toString.call(value) === '[object Arguments]'
 
 export const isInfOrNaN = (value: unknown): boolean =>
   typeof value === 'number' &&

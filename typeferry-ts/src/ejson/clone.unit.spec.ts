@@ -98,12 +98,12 @@ describe('clone', () => {
   })
 
   describe('arguments objects', () => {
-    it('clones an arguments-like object to an array', () => {
-      // isArguments checks for { callee: ... }
+    it('does not treat plain objects with forged callee as arguments objects', () => {
       const argsLike = { 0: 'a', 1: 'b', length: 2, callee: () => {} }
-      const cloned = clone(argsLike)
-      // It should be cloned as an array via Array.from()
-      expect(Array.isArray(cloned)).toBe(true)
+      const cloned = clone(argsLike) as Record<string, unknown>
+      expect(Array.isArray(cloned)).toBe(false)
+      expect(cloned['0']).toBe('a')
+      expect(cloned['1']).toBe('b')
     })
 
     it('clones real arguments objects', () => {

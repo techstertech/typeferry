@@ -9,7 +9,13 @@
 export function isPlainObject(
   value: unknown,
 ): value is Record<string, unknown> {
-  if (value == null || typeof value !== 'object') return false
+  if (
+    value == null ||
+    typeof value !== 'object' ||
+    value === Object.prototype
+  ) {
+    return false
+  }
   const proto = Object.getPrototypeOf(value)
   return proto === Object.prototype || proto === null
 }
@@ -33,9 +39,18 @@ export function merge<T extends Record<string, unknown>>(
 ): T {
   for (const source of sources) {
     for (const [key, val] of Object.entries(source)) {
-      if (val === undefined) continue
+      if (
+        val === undefined ||
+        key === '__proto__' ||
+        key === 'constructor' ||
+        key === 'prototype'
+      ) {
+        continue
+      }
 
-      const targetVal = (target as Record<string, unknown>)[key]
+      const targetVal = Object.hasOwn(target, key)
+        ? (target as Record<string, unknown>)[key]
+        : undefined
       if (isPlainObject(targetVal) && isPlainObject(val)) {
         ;(target as Record<string, unknown>)[key] = merge({ ...targetVal }, val)
       } else {

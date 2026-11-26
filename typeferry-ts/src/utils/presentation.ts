@@ -1,5 +1,3 @@
-import { v4 } from '@lukeed/uuid'
-
 import { EJSON } from '../ejson'
 
 export enum PayloadType {
@@ -11,7 +9,7 @@ export enum PayloadType {
 }
 
 export namespace Presentation {
-  export const uuid = v4
+  export const uuid = (): string => globalThis.crypto.randomUUID()
 
   export type Payload = {
     type: PayloadType

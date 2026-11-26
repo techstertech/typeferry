@@ -1,5 +1,7 @@
 import { EJSON } from './index'
 import {
+  MAX_EJSON_DEPTH,
+  defineOwnProperty,
   isArguments,
   isFunction,
   isObject,
@@ -59,7 +61,7 @@ function cloneSpecialTypes(
 export const clone = (rootVal: any) => {
   const set = new WeakSet()
 
-  function cloneArray(arr: any[]) {
+  function cloneArray(arr: any[], depth: number) {
     set.add(arr)
 
     return arr
@@ -68,34 +70,40 @@ export const clone = (rootVal: any) => {
           if (set.has(val as object)) return undefined
           set.add(val as object)
         }
-        return internalClone(val)
+        return internalClone(val, depth + 1)
       })
       .filter(val => val !== undefined)
   }
 
-  function internalClone(internalVal: any): any {
+  function internalClone(internalVal: any, depth = 0): any {
+    if (depth > MAX_EJSON_DEPTH) {
+      throw new RangeError('Maximum EJSON nesting depth exceeded')
+    }
+
     const primitiveResult = clonePrimitive(internalVal)
     if (primitiveResult.handled) return primitiveResult.result
 
-    const specialResult = cloneSpecialTypes(internalVal, internalClone)
+    const specialResult = cloneSpecialTypes(internalVal, v =>
+      internalClone(v, depth + 1),
+    )
     if (specialResult.handled) return specialResult.result
 
-    if (Array.isArray(internalVal)) return cloneArray(internalVal)
+    if (Array.isArray(internalVal)) return cloneArray(internalVal, depth)
 
     if (isArguments(internalVal)) {
       set.add(internalVal)
-      return cloneArray(Array.from(internalVal))
+      return cloneArray(Array.from(internalVal), depth)
     }
 
     set.add(internalVal)
 
-    const ret: any = {}
+    const ret: Record<string, unknown> = {}
     keysOf(internalVal).forEach(key => {
       if (isObjectAndNotNull(internalVal[key])) {
         if (set.has(internalVal[key])) return
         set.add(internalVal[key])
       }
-      ret[key] = internalClone(internalVal[key])
+      defineOwnProperty(ret, key, internalClone(internalVal[key], depth + 1))
     })
 
     return ret

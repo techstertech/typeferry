@@ -181,8 +181,15 @@ describe('convertMapToObject', () => {
 })
 
 describe('isArguments', () => {
-  it('returns true for objects with a callee property', () => {
-    expect(isArguments({ callee: () => {} })).toBe(true)
+  it('returns true for genuine JS arguments objects', () => {
+    function capture(..._items: unknown[]) {
+      return arguments
+    }
+    expect(isArguments(capture(1, 2))).toBe(true)
+  })
+
+  it('returns false for plain objects with a callee property (OOM prevention)', () => {
+    expect(isArguments({ callee: () => {}, length: 2 })).toBe(false)
   })
 
   it('returns false for plain objects without callee', () => {
@@ -197,8 +204,8 @@ describe('isArguments', () => {
     expect(isArguments(undefined)).toBe(false)
   })
 
-  it('returns true when callee is any truthy value', () => {
-    expect(isArguments({ callee: 'not-a-function' })).toBe(true)
+  it('returns false when callee is a non-function on a plain object', () => {
+    expect(isArguments({ callee: 'not-a-function' })).toBe(false)
   })
 })
 

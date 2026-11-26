@@ -188,6 +188,21 @@ describe('merge', () => {
 
     expect(result).toEqual({ a: 3 })
   })
+
+  it('ignores __proto__, constructor, and prototype keys to prevent prototype pollution', () => {
+    const target: Record<string, unknown> = { safe: 1 }
+    const malicious = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":{"prototype":{"pollutedCtor":true}},"prototype":{"pollutedProto":true}}',
+    ) as Record<string, unknown>
+
+    const result = merge(target, malicious)
+
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined()
+    expect(({} as Record<string, unknown>)['pollutedCtor']).toBeUndefined()
+    expect(({} as Record<string, unknown>)['pollutedProto']).toBeUndefined()
+    expect(result).toEqual({ safe: 1 })
+  })
 })
 
 describe('throttle', () => {

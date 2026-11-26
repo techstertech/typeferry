@@ -4,9 +4,19 @@
  * different if the object you hand it itself needs changing.
  */
 import { fromJSONValueHelper } from './helpers/from-json-value-helper'
-import { isObject, isObjectRecord, keysOf } from './utils'
+import {
+  MAX_EJSON_DEPTH,
+  defineOwnProperty,
+  isObject,
+  isObjectRecord,
+  keysOf,
+} from './utils'
 
-export const adjustTypesFromJSONValue = (obj: unknown): unknown => {
+export const adjustTypesFromJSONValue = (obj: unknown, depth = 0): unknown => {
+  if (depth > MAX_EJSON_DEPTH) {
+    throw new RangeError('Maximum EJSON nesting depth exceeded')
+  }
+
   if (obj === null) {
     return null
   }
@@ -28,12 +38,12 @@ export const adjustTypesFromJSONValue = (obj: unknown): unknown => {
     if (isObject(value)) {
       const changed = fromJSONValueHelper(value)
       if (value !== changed) {
-        obj[key] = changed
+        defineOwnProperty(obj, key, changed)
         return
       }
       // if we get here, value is an object but not adjustable
       // at this level.  recurse.
-      adjustTypesFromJSONValue(value)
+      adjustTypesFromJSONValue(value, depth + 1)
     }
   })
   return obj

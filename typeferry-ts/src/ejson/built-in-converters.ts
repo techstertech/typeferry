@@ -1,7 +1,7 @@
 import { decodeBase64, encodeBase64 } from './base64'
 import { customTypes } from './custom-types'
 import { EJSON } from './index'
-import { hasOwn, isInfOrNaN, keysOf, lengthOf } from './utils'
+import { defineOwnProperty, hasOwn, isInfOrNaN, keysOf, lengthOf } from './utils'
 
 type EJSONRecord = Record<string, unknown>
 
@@ -111,7 +111,7 @@ export const escapeConverter = {
       const escaped: EJSONRecord = {}
 
       for (const key of keysOf(record)) {
-        escaped[key] = EJSON.toJSONValue(record[key])
+        defineOwnProperty(escaped, key, EJSON.toJSONValue(record[key]))
       }
 
       return { $escape: escaped }
@@ -121,7 +121,7 @@ export const escapeConverter = {
       const result: EJSONRecord = {}
 
       for (const key of keysOf(escaped)) {
-        result[key] = EJSON.fromJSONValue(escaped[key])
+        defineOwnProperty(result, key, EJSON.fromJSONValue(escaped[key]))
       }
 
       return result

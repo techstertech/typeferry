@@ -1,10 +1,16 @@
+import { MAX_EJSON_DEPTH, defineOwnProperty } from './utils'
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function sortJsonValue(value: unknown): unknown {
+function sortJsonValue(value: unknown, depth = 0): unknown {
+  if (depth > MAX_EJSON_DEPTH) {
+    throw new RangeError('Maximum EJSON nesting depth exceeded')
+  }
+
   if (Array.isArray(value)) {
-    return value.map(sortJsonValue)
+    return value.map(item => sortJsonValue(item, depth + 1))
   }
 
   if (!isPlainObject(value)) {
@@ -16,7 +22,9 @@ function sortJsonValue(value: unknown): unknown {
     .reduce<Record<string, unknown>>((accumulator, key) => {
       const child = value[key]
 
-      if (child !== undefined) accumulator[key] = sortJsonValue(child)
+      if (child !== undefined) {
+        defineOwnProperty(accumulator, key, sortJsonValue(child, depth + 1))
+      }
 
       return accumulator
     }, {})
