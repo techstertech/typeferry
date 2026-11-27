@@ -1,5 +1,7 @@
 # Published Template Dependency
 
+> **Superseded**: This decision is superseded by [`decisions/2026-11-26-github-release-tarball-distribution.md`](2026-11-26-github-release-tarball-distribution.md). The template now consumes the verified `typeferry` tarball from GitHub Releases instead of the public npm registry.
+
 ## Context
 
 The application template originally used `file:../typeferry-ts` so it could be

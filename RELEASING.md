@@ -1,15 +1,15 @@
 # TypeFerry Release Status
 
-The TypeScript implementation is configured for operator-controlled publication to the public npm registry. Python, Rust, and Go releases require separate publication approval.
+The TypeScript implementation (`typeferry-ts/`) is marked `"private": true` to prevent publication to the public npm registry. Versioned TypeScript releases are distributed exclusively as verified `npm pack` tarballs (`typeferry-<version>.tgz`) attached to GitHub Releases on [`techstertech/typeferry`](https://github.com/techstertech/typeferry/releases). Python, Rust, and Go releases remain disabled or untagged unless separately approved.
 
-## Registry Identities
+## Distribution Identities
 
-| Implementation | Registry identity             |  Version | Status                                   |
-| -------------- | ----------------------------- | -------: | ---------------------------------------- |
-| TypeScript     | `typeferry`                   | `0.16.0` | Published; public npm `latest` |
-| Python         | `typeferry-py`                |  `0.2.0` | Temporary identity; publication disabled |
-| Rust           | `typeferry` and `typeferry-*` |  `0.2.0` | Workspace publication disabled           |
-| Go             | `github.com/leonardoventurini/typeferry/typeferry-go` | Untagged | Approved API; local and remote parity passed; no release tag |
+| Implementation | Distribution identity | Version | Status |
+|---|---|---|---|
+| TypeScript | [`techstertech/typeferry` GitHub Releases](https://github.com/techstertech/typeferry/releases) (`typeferry-<version>.tgz`) | `0.17.0` | Preparing `v0.17.0` GitHub Release; npm publication retired |
+| Python | `typeferry-py` | `0.2.0` | Temporary identity; publication disabled |
+| Rust | `typeferry` and `typeferry-*` | `0.2.0` | Workspace publication disabled |
+| Go | `github.com/leonardoventurini/typeferry/typeferry-go` | Untagged | Approved API; local and remote parity passed; no release tag |
 
 ## Go candidate review
 
@@ -41,6 +41,10 @@ adapter dependencies. MongoDB live views, a Go client and extra OAuth providers
 are outside the accepted shared server scope.
 
 ## TypeScript release
+
+### Historical npm releases (`0.13.0` – `0.16.0`)
+
+Releases `0.13.0` through `0.16.0` were published to `registry.npmjs.org` prior to adopting GitHub Release tarball distribution under [the GitHub Release tarball decision](decisions/2026-11-26-github-release-tarball-distribution.md). Those historical records are preserved below for auditability.
 
 <a id="0160-candidate"></a>
 
@@ -254,44 +258,35 @@ publication guard changed. The agent did not publish or push the release.
 Registry checksums match the verified candidate exactly; the specification
 records its full identity. Downstream registry adoption is now unblocked.
 
-## npm Release Gate
+## Release Verification Gate
 
 Run from the repository root with Mise installed:
 
 ```sh
-just verify-npm-release
+just verify-release
 ```
 
-The recipe automatically installs and selects the exact Node.js `24.19.0` and npm `11.17.0` toolchain pinned in [`.mise.toml`](.mise.toml). It then installs the locked graph, lints, typechecks, runs all split test suites, builds the package, executes `npm pack --dry-run --json`, and validates every tarball path. The artifact may contain only `README.md`, `package.json`, and compiled JavaScript, declarations, and source maps beneath `dist/`. Every explicit export target must exist; tests, source, configuration, credentials, and retired Lit output are rejected. Pack verification remains repeatable after a version is published.
+The recipe automatically installs and selects the exact Node.js `24.19.0` and npm `11.17.0` toolchain pinned in [`.mise.toml`](.mise.toml). It then installs the locked graph, lints, typechecks, runs all split test suites, builds the package, verifies the packed application consumer, executes `npm pack --dry-run --json`, and validates every manifest field and tarball path with `scripts/verify-release-package.mjs`. The artifact may contain only `README.md`, `package.json`, and compiled JavaScript, declarations, and source maps beneath `dist/`. Every explicit export target must exist; `private: true` must be set, `publishConfig` must be absent, and tests, source, configuration, credentials, and retired Lit output are rejected.
 
-The integration suite requires Redis. The release recipe uses `REDIS_URL` unchanged when it is set. Otherwise, it starts a temporary `redis:7-alpine` Docker container on a dynamically assigned loopback port, waits for readiness, and removes it after the tests. Keep Docker running for the automatic fallback, or provide a reachable external Redis URL.
+The integration suite requires Redis and MongoDB. The release recipe uses `REDIS_URL` and `TYPEFERRY_MONGODB_TEST_URI` unchanged when set. Otherwise, it starts temporary Docker containers on dynamically assigned loopback ports, waits for readiness, and removes them after the tests. Keep Docker running for the automatic fallback, or provide reachable external services.
 
-CI runs the same package-artifact validator after its complete TypeScript gate.
+CI (`.github/workflows/ci.yml`) runs the same package-artifact validator after its complete TypeScript gate.
 
-## Publish to npm
+## Publish a GitHub Release
 
-Authenticate with npm using the account and two-factor/trusted-publishing policy appropriate to the package, then run from a clean `main` checkout:
+TypeScript releases are published automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) when an annotated `v<version>` tag is pushed to `origin` (`techstertech/typeferry`):
+
+1. Update `version` in [`typeferry-ts/package.json`](typeferry-ts/package.json) and [`typeferry-ts/package-lock.json`](typeferry-ts/package-lock.json).
+2. Run `just verify-release` locally and commit the release preparation on `main`.
+3. Push `main` and push the matching annotated tag:
 
 ```sh
-npm login --registry=https://registry.npmjs.org/
-just publish-npm
+git push origin main
+git tag -a v<version> -m "Release v<version>"
+git push origin v<version>
 ```
 
-The recipe requires:
-
-- automatic installation and selection of the exact Node/npm versions through Mise;
-- a clean tracked and untracked worktree on `main`;
-- successful `npm whoami` against the public registry;
-- a newly selected package version in the manifest and lockfile, with that
-  exact version absent from the registry;
-- the complete non-uploading release gate.
-
-Only after those checks does it execute `npm publish --access public`. The
-recipe does not bump versions, create Git tags, push commits, or store
-credentials. After npm confirms the upload, create the annotated Git tag
-`v<version>` and push the release commit and tag. No GitHub release is created.
-
-An npm version cannot be reused after publication. If a release is incorrect, deprecate it as appropriate, fix the repository, choose a higher semantic version, and rerun the gate.
+The release workflow verifies that the tag matches `typeferry-ts/package.json`, runs the complete TypeScript verification gate (audit, lint, typecheck, unit, Docker-backed MongoDB/Redis integration, Playwright browser tests, build, `verify:consumer`, and `verify-release-package.mjs`), packs `typeferry-<version>.tgz` and `typeferry-<version>.tgz.sha256`, and creates the GitHub Release. It does not touch npm or store registry credentials.
 
 ## Other Implementations
 
@@ -299,6 +294,6 @@ An npm version cannot be reused after publication. If a release is incorrect, de
 - `typeferry-rs/Cargo.toml` keeps workspace publication set to `false`.
 - `typeferry-go/` has an approved public API. It passed local and remote parity
   checks and has no release tag.
-- No GitHub workflow uploads packages or contains registry credentials.
+- No GitHub workflow publishes packages to npm or contains npm registry credentials.
 
 Enabling PyPI or crates.io publication requires a separate identity, authentication, dependency-order, migration, and rollout decision.

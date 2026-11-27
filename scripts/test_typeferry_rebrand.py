@@ -33,16 +33,19 @@ class TypeFerryRebrandTest(unittest.TestCase):
         self.assertEqual(1, search.returncode, search.stdout)
         self.assertEqual("", search.stdout)
 
-    def test_typescript_identity_is_public_while_other_packages_are_guarded(self) -> None:
+    def test_typescript_package_guards_against_npm_publication_while_other_packages_are_guarded(
+        self,
+    ) -> None:
         package_json = json.loads(
             (REPO_ROOT / "typeferry-ts/package.json").read_text(encoding="utf-8")
         )
         self.assertEqual(PUBLIC_TYPESCRIPT_NAME, package_json["name"])
         self.assertEqual(">=24.19.0 <27", package_json["engines"]["node"])
-        self.assertNotIn("private", package_json)
+        self.assertIs(True, package_json.get("private"))
+        self.assertNotIn("publishConfig", package_json)
         self.assertEqual(
-            {"access": "public", "registry": "https://registry.npmjs.org/"},
-            package_json["publishConfig"],
+            "git+https://github.com/techstertech/typeferry.git",
+            package_json["repository"]["url"],
         )
 
         pyproject = tomllib.loads(
@@ -55,16 +58,18 @@ class TypeFerryRebrandTest(unittest.TestCase):
         )
         self.assertIs(False, cargo["workspace"]["package"]["publish"])
 
-    def test_automated_publish_workflows_are_absent(self) -> None:
+    def test_npm_publish_workflows_are_absent(self) -> None:
         workflows = REPO_ROOT / ".github/workflows"
         publish_workflows = sorted(workflows.glob("publish-*.yml"))
 
         self.assertEqual([], publish_workflows)
         self.assertFalse((workflows / "release-bump.yml").exists())
+        self.assertTrue((workflows / "release.yml").is_file())
 
-        ci_text = (workflows / "ci.yml").read_text(encoding="utf-8")
-        self.assertNotIn("npm publish", ci_text)
-        self.assertNotIn("publish-ts:", ci_text)
+        for workflow_file in sorted(workflows.glob("*.yml")):
+            workflow_text = workflow_file.read_text(encoding="utf-8")
+            self.assertNotIn("npm publish", workflow_text)
+            self.assertNotIn("publish-ts:", workflow_text)
 
     def test_protocol_v2_uses_typeferry_wire_identifiers(self) -> None:
         protocol = (REPO_ROOT / "PROTOCOL.md").read_text(encoding="utf-8")

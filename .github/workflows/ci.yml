@@ -12,7 +12,8 @@ on:
       - "docs/conformance/**"
       - "PROTOCOL.md"
       - ".github/workflows/ci.yml"
-      - "scripts/verify-npm-package.mjs"
+      - ".github/workflows/release.yml"
+      - "scripts/verify-release-package.mjs"
   pull_request:
     paths:
       - "typeferry-ts/**"
@@ -23,7 +24,8 @@ on:
       - "docs/conformance/**"
       - "PROTOCOL.md"
       - ".github/workflows/ci.yml"
-      - "scripts/verify-npm-package.mjs"
+      - ".github/workflows/release.yml"
+      - "scripts/verify-release-package.mjs"
 
 permissions:
   contents: read
@@ -206,8 +208,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify npm package
-        run: node ../scripts/verify-npm-package.mjs
+      - name: Verify release package
+        run: node ../scripts/verify-release-package.mjs
 
   ci-py:
     name: CI (typeferry-py)

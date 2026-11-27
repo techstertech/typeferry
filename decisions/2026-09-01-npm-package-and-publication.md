@@ -1,5 +1,7 @@
 # npm Package and Publication
 
+> **Superseded**: This decision is superseded by [`decisions/2026-11-26-github-release-tarball-distribution.md`](2026-11-26-github-release-tarball-distribution.md). TypeFerry no longer publishes to the public npm registry and distributes `typeferry-<version>.tgz` tarballs via GitHub Releases instead.
+
 ## Context
 
 The TypeScript implementation used temporary private package identity `typeferry-ts` while the TypeFerry rebrand and registry choices were unresolved. The package is now ready for an operator-controlled public npm release. An exact public-registry check found no package document for `typeferry` on 2026-09-01, but that observation neither reserves the name nor guarantees future publishability.

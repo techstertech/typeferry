@@ -9,10 +9,10 @@ TypeFerry repository itself, use the separate
 
 Prefer the [application template](../../template/README.md) when starting a
 React and MongoDB application. It is executable reference code, not framework
-source to import. For an existing application, install the public package:
+source to import. For an existing application, install the verified release tarball:
 
 ```sh
-npm install typeferry
+npm install https://github.com/techstertech/typeferry/releases/download/v0.17.0/typeferry-0.17.0.tgz
 ```
 
 Before editing, inspect the application's `package.json`, nearest `AGENTS.md`,

@@ -1,7 +1,6 @@
 set shell := ['bash', '-euo', 'pipefail', '-c']
 
 package_dir := 'typeferry-ts'
-registry := 'https://registry.npmjs.org/'
 
 # List repository-level release recipes.
 default:
@@ -26,8 +25,8 @@ verify-shared-fixtures:
     cd typeferry-rs && cargo test --locked -p typeferry-conformance
     cd typeferry-go && go test -count=1 ./ejson ./httptransport ./websocket ./redistransport
 
-# Run the complete non-uploading npm release and artifact gate.
-verify-npm-release: install-npm-toolchain
+# Run the complete release verification and tarball package gate.
+verify-release: install-npm-toolchain
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -47,18 +46,4 @@ verify-npm-release: install-npm-toolchain
     ../scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh "$node_path" "$npm_path" test
     "$node_path" "$npm_path" run build
     "$node_path" "$npm_path" run verify:consumer
-    "$node_path" ../scripts/verify-npm-package.mjs
-
-# Validate irreversible publish preconditions before running the longer gate.
-[private]
-assert-npm-publish-state: install-npm-toolchain
-    test "$(git symbolic-ref --quiet HEAD)" = "refs/heads/main"
-    git diff --quiet
-    git diff --cached --quiet
-    test -z "$(git status --porcelain)"
-    mise exec -- npm whoami --registry={{ registry }} >/dev/null
-    mise exec -- node scripts/verify-npm-package.mjs --check-version-available
-
-# Publish the verified TypeScript package to the public npm registry.
-publish-npm: assert-npm-publish-state verify-npm-release
-    cd {{ package_dir }} && mise exec -- npm publish --access public --registry={{ registry }}
+    "$node_path" ../scripts/verify-release-package.mjs

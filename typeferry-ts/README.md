@@ -2,10 +2,10 @@
 
 The TypeScript implementation of TypeFerry provides the reference Node.js server, browser/Node client, React hooks, authentication helpers, EJSON, and an optional MongoDB extension.
 
-Install the public TypeScript package with `npm install typeferry`. Repository contributors can use the local [`template/`](../template/) workflow described in the [quickstart](../docs/getting-started.md).
+Install the verified TypeScript release tarball from GitHub Releases with `npm install https://github.com/techstertech/typeferry/releases/download/v0.17.0/typeferry-0.17.0.tgz`. Repository contributors can use the local [`template/`](../template/) workflow described in the [quickstart](../docs/getting-started.md).
 
 AI coding agents building consumer applications should begin with the
-[agent application guide](https://github.com/leonardoventurini/typeferry/blob/main/docs/agents/application-development.md).
+[agent application guide](https://github.com/techstertech/typeferry/blob/main/docs/agents/application-development.md).
 It defines the supported project structure, public imports, package-owned
 commands, optional configuration, safety boundaries, and completion checks.
 
@@ -87,7 +87,7 @@ application `dependencies`, and the application must ship them in its
 production runtime installation.
 
 See the full
-[application framework guide](https://github.com/leonardoventurini/typeferry/blob/main/docs/typescript/application-framework.md)
+[application framework guide](https://github.com/techstertech/typeferry/blob/main/docs/typescript/application-framework.md)
 for command behavior, test discovery, every configuration field, migration,
 ownership boundaries, upgrades, and troubleshooting.
 

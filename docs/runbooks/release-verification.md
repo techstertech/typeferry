@@ -1,12 +1,13 @@
 # Release Verification Runbook
 
-This runbook verifies release readiness; it does not authorize publication. Read [`RELEASING.md`](../../RELEASING.md) first because package publication remains disabled until registry identities and migration decisions are approved.
+This runbook verifies release readiness; it does not directly publish a release. Read [`RELEASING.md`](../../RELEASING.md) first because TypeScript releases ship exclusively as verified GitHub Release tarballs triggered by pushing `v*` tags, while Python, Rust, and Go publication remains disabled or untagged.
 
 ## Preconditions
 
 - Confirm the target package and intended version.
+- Confirm `typeferry-ts/package.json` keeps `"private": true` and omits `publishConfig`.
 - Confirm the worktree is clean and the release commit is identified.
-- Confirm publication is authorized separately; verification alone must not change `private`, `publish`, registry, or workflow guards.
+- Confirm tag creation and push are authorized separately; verification alone must not change `private`, registry, or workflow guards.
 - Use clean, immutable dependency installation where the ecosystem supports it.
 
 ## TypeScript release surface
@@ -14,7 +15,7 @@ This runbook verifies release readiness; it does not authorize publication. Read
 The repository-level release gate installs and selects Node.js `24.19.0` and npm `11.17.0` from the root `.mise.toml` before running package commands:
 
 ```sh
-just verify-npm-release
+just verify-release
 ```
 
 The recipe resolves Node and npm paths before changing `PATH`. It invokes npm
@@ -22,12 +23,12 @@ through the selected Node interpreter. Child commands receive the selected npm
 directory before the Node directory. This avoids host runtime selection through
 script shebangs and Node's bundled npm wrapper.
 
-The TypeScript gate excludes the root release-workflow contract test. After
-editing release recipes, run this existing check from the repository root.
+The TypeScript gate excludes the root release-workflow contract tests. After
+editing release recipes or workflows, run this existing check from the repository root.
 It requires the Python development environment:
 
 ```sh
-typeferry-py/.venv/bin/python -m pytest scripts/test_npm_publication.py::test_root_justfile_has_safe_npm_release_recipes -q
+typeferry-py/.venv/bin/python -m pytest scripts/ -q
 ```
 
 The integration suite requires Redis. When `REDIS_URL` is set, the release gate

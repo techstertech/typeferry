@@ -4,7 +4,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const EXPECTED_NAME = "typeferry";
-const NPM_REGISTRY = "https://registry.npmjs.org/";
+const REPOSITORY_URL = "git+https://github.com/techstertech/typeferry.git";
+const HOMEPAGE_URL = "https://github.com/techstertech/typeferry#readme";
+const BUGS_URL = "https://github.com/techstertech/typeferry/issues";
 const ROOT_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -23,11 +25,6 @@ const RETIRED_PATH_PREFIX = "dist/lit/";
 async function main() {
   const manifest = JSON.parse(await readFile(PACKAGE_JSON_PATH, "utf8"));
   validateManifest(manifest);
-
-  if (process.argv.includes("--check-version-available")) {
-    await assertVersionAvailable(manifest);
-    return;
-  }
 
   const packageResult = spawnSync("npm", ["pack", "--dry-run", "--json"], {
     cwd: PACKAGE_DIR,
@@ -54,28 +51,32 @@ function validateManifest(manifest) {
     `package name must be ${EXPECTED_NAME}`,
   );
   assert(typeof manifest.version === "string", "package version is required");
-  assert(manifest.private !== true, "package must not be private");
+  assert(
+    manifest.private === true,
+    "package must be marked private to prevent npm registry publication",
+  );
   assert(manifest.license === "MIT", "package license must be MIT");
   assert(
-    manifest.publishConfig?.access === "public",
-    "publishConfig.access must be public",
-  );
-  assert(
-    manifest.publishConfig?.registry === NPM_REGISTRY,
-    `publishConfig.registry must be ${NPM_REGISTRY}`,
+    manifest.publishConfig === undefined,
+    "publishConfig must not be configured",
   );
   assert(manifest.repository?.type === "git", "repository.type must be git");
   assert(
-    manifest.repository?.url ===
-      "git+https://github.com/leonardoventurini/typeferry.git",
-    "repository.url must target the public TypeFerry repository",
+    manifest.repository?.url === REPOSITORY_URL,
+    `repository.url must target ${REPOSITORY_URL}`,
   );
   assert(
     manifest.repository?.directory === "typeferry-ts",
     "repository.directory must identify the TypeScript package root",
   );
-  assert(typeof manifest.homepage === "string", "homepage is required");
-  assert(typeof manifest.bugs?.url === "string", "bugs.url is required");
+  assert(
+    manifest.homepage === HOMEPAGE_URL,
+    `homepage must target ${HOMEPAGE_URL}`,
+  );
+  assert(
+    manifest.bugs?.url === BUGS_URL,
+    `bugs.url must target ${BUGS_URL}`,
+  );
   assert(Array.isArray(manifest.files), "files allowlist is required");
   assert(
     manifest.files.length === 1 && manifest.files[0] === "dist",
@@ -233,55 +234,6 @@ function collectExportTargets(exports) {
   }
 
   return targets.filter((target) => !target.includes("*"));
-}
-
-async function assertVersionAvailable(manifest) {
-  const packageUrl = new URL(encodeURIComponent(manifest.name), NPM_REGISTRY);
-  const response = await fetch(packageUrl, {
-    headers: { accept: "application/vnd.npm.install-v1+json" },
-  });
-
-  if (response.status === 404) {
-    console.log(
-      `${manifest.name}@${manifest.version} is absent from the public registry.`,
-    );
-    return;
-  }
-
-  assert(response.ok, `npm registry check failed with HTTP ${response.status}`);
-  const registryDocument = await response.json();
-  assert(
-    !Object.hasOwn(registryDocument.versions ?? {}, manifest.version),
-    `${manifest.name}@${manifest.version} is already published`,
-  );
-  const latestVersion = registryDocument["dist-tags"]?.latest;
-  if (typeof latestVersion === "string") {
-    assert(
-      compareReleaseVersions(manifest.version, latestVersion) > 0,
-      `${manifest.name}@${manifest.version} must be newer than the latest published version ${latestVersion}`,
-    );
-  }
-  console.log(
-    `${manifest.name}@${manifest.version} is available as a new version.`,
-  );
-}
-
-function compareReleaseVersions(left, right) {
-  const parse = (version) => {
-    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-    assert(match, `release version must use major.minor.patch: ${version}`);
-    return match.slice(1).map(Number);
-  };
-  const leftParts = parse(left);
-  const rightParts = parse(right);
-
-  for (let index = 0; index < leftParts.length; index += 1) {
-    if (leftParts[index] !== rightParts[index]) {
-      return leftParts[index] - rightParts[index];
-    }
-  }
-
-  return 0;
 }
 
 function assert(condition, message) {

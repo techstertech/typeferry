@@ -1,6 +1,7 @@
 {
   "name": "typeferry",
-  "version": "0.16.0",
+  "version": "0.17.0",
+  "private": true,
   "description": "Type-safe real-time RPC framework for TypeScript",
   "type": "module",
   "sideEffects": false,
@@ -209,15 +210,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/leonardoventurini/typeferry.git",
+    "url": "git+https://github.com/techstertech/typeferry.git",
     "directory": "typeferry-ts"
   },
-  "homepage": "https://github.com/leonardoventurini/typeferry#readme",
+  "homepage": "https://github.com/techstertech/typeferry#readme",
   "bugs": {
-    "url": "https://github.com/leonardoventurini/typeferry/issues"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
+    "url": "https://github.com/techstertech/typeferry/issues"
   }
 }

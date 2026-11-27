@@ -20,7 +20,7 @@ and builds both sides for production. There is no generated client to keep in
 sync and no separate Vite or Vitest setup to assemble.
 
 ```sh
-npm install typeferry
+npm install https://github.com/techstertech/typeferry/releases/download/v0.17.0/typeferry-0.17.0.tgz
 ```
 
 ## Where TypeFerry shines
@@ -293,7 +293,7 @@ Python, Rust, and Go implement the same normative wire protocol.
 
 | Implementation | Server | Client | UI adapter | Status |
 |---|---:|---:|---|---|
-| [TypeScript](typeferry-ts/README.md) | Node.js | Browser and Node.js | React | Published as `typeferry` |
+| [TypeScript](typeferry-ts/README.md) | Node.js | Browser and Node.js | React | Published via [GitHub Releases](https://github.com/techstertech/typeferry/releases) (`typeferry-<version>.tgz`) |
 | [Python](typeferry-py/README.md) | Yes | — | — | Publication disabled |
 | [Rust](typeferry-rs/README.md) | Yes | — | — | Publication disabled |
 | [Go](typeferry-go/README.md) | Yes | — | — | Approved API, no release tag |

@@ -1,0 +1,230 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish GitHub Release (typeferry-ts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: typeferry-ts
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      REDIS_URL: redis://127.0.0.1:16379
+      TYPEFERRY_MONGODB_TEST_URI: mongodb://127.0.0.1:27018/?replicaSet=typeferry-ci
+      TYPEFERRY_MONGODB_TEST_DB: typeferry_mongodb_ci_test
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: typeferry-ts/package-lock.json
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: typeferry-go/go.mod
+          cache-dependency-path: typeferry-go/go.mod
+
+      - name: Pin npm
+        run: npm install --global npm@11.17.0
+
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.19.0"
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Verify tag matches package version
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(node -p "require('./package.json').version")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid package version: $version" >&2
+            exit 1
+          fi
+          if [[ "$tag" != "v${version}" ]]; then
+            echo "Tag ${tag} does not match package.json version ${version}" >&2
+            exit 1
+          fi
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+        timeout-minutes: 10
+
+      - name: Security audit
+        run: npm audit --audit-level=low
+
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit -- --no-file-parallelism
+        timeout-minutes: 10
+
+      - name: Start integration services
+        env:
+          MONGO_CONTAINER: typeferry-mongodb-release
+          REDIS_CONTAINER: typeferry-redis-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm --force "$MONGO_CONTAINER" "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+          docker run --detach --rm \
+            --name "$MONGO_CONTAINER" \
+            --publish 127.0.0.1:27018:27018 \
+            mongo:7.0@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4 \
+            mongod --bind_ip_all --port 27018 --replSet typeferry-ci
+          docker run --detach --rm \
+            --name "$REDIS_CONTAINER" \
+            --publish 127.0.0.1:16379:6379 \
+            redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
+          for attempt in $(seq 1 60); do
+            if docker exec "$MONGO_CONTAINER" mongosh --quiet --port 27018 --eval \
+              'db.adminCommand({ping:1})' >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$MONGO_CONTAINER" mongosh --quiet --port 27018 --eval \
+            'rs.initiate({_id:"typeferry-ci",members:[{_id:0,host:"127.0.0.1:27018"}]})'
+          for attempt in $(seq 1 60); do
+            if docker exec "$MONGO_CONTAINER" mongosh --quiet --port 27018 --eval \
+              'if (!db.hello().isWritablePrimary) quit(1)' >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$MONGO_CONTAINER" mongosh --quiet --port 27018 --eval \
+            'if (!db.hello().isWritablePrimary) quit(1)' >/dev/null
+          for attempt in $(seq 1 30); do
+            if docker exec "$REDIS_CONTAINER" redis-cli ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$MONGO_CONTAINER"
+          docker logs "$REDIS_CONTAINER"
+          exit 1
+        timeout-minutes: 5
+
+      - name: Integration tests
+        run: npm run test:integration
+        timeout-minutes: 10
+
+      - name: Stop integration services
+        if: always()
+        env:
+          MONGO_CONTAINER: typeferry-mongodb-release
+          REDIS_CONTAINER: typeferry-redis-release
+        run: docker stop "$MONGO_CONTAINER" "$REDIS_CONTAINER" || true
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('typeferry-ts/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - run: npm exec -- playwright install --with-deps
+        timeout-minutes: 10
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+
+      - run: npm exec -- playwright install-deps
+        timeout-minutes: 10
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+
+      - name: Browser tests
+        run: npm run test:browser
+        timeout-minutes: 10
+        env:
+          CI: true
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify packed consumer
+        run: npm run verify:consumer
+
+      - name: Verify release package
+        run: node ../scripts/verify-release-package.mjs
+
+      - name: Pack release tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.release_meta.outputs.version }}"
+          tarball_name="typeferry-${version}.tgz"
+          sha256_name="${tarball_name}.sha256"
+          mkdir -p ../release-artifacts
+          npm pack --pack-destination ../release-artifacts
+          test -f "../release-artifacts/${tarball_name}"
+          (
+            cd ../release-artifacts
+            sha256sum "${tarball_name}" > "${sha256_name}"
+          )
+          sha256="$(awk '{print $1}' "../release-artifacts/${sha256_name}")"
+          {
+            echo "tarball_name=${tarball_name}"
+            echo "tarball_path=../release-artifacts/${tarball_name}"
+            echo "sha256_path=../release-artifacts/${sha256_name}"
+            echo "sha256=${sha256}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_meta.outputs.tag }}
+          TARBALL_NAME: ${{ steps.pack.outputs.tarball_name }}
+          TARBALL_PATH: ${{ steps.pack.outputs.tarball_path }}
+          SHA256_PATH: ${{ steps.pack.outputs.sha256_path }}
+          SHA256: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          tarball_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${TARBALL_NAME}"
+          release_notes="$(cat <<EOF
+          Install this verified release tarball directly with npm:
+
+          \`\`\`sh
+          npm install ${tarball_url}
+          \`\`\`
+
+          - Tarball: \`${TARBALL_NAME}\`
+          - SHA-256: \`${SHA256}\`
+          EOF
+          )"
+          gh release create "$TAG" "$TARBALL_PATH" "$SHA256_PATH" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            --notes "$release_notes"

@@ -8,7 +8,7 @@ esbuild, proxy, or process-orchestration files.
 ## Install and add scripts
 
 ```sh
-npm install typeferry
+npm install https://github.com/techstertech/typeferry/releases/download/v0.17.0/typeferry-0.17.0.tgz
 ```
 
 Expose the package-owned commands through the application manifest:
@@ -344,7 +344,7 @@ that workflow.
 ## Upgrade
 
 ```sh
-npm install typeferry@latest
+npm install https://github.com/techstertech/typeferry/releases/download/v<version>/typeferry-<version>.tgz
 npm run typecheck
 npm test
 npm run build

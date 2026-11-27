@@ -1,4 +1,4 @@
-"""Contract tests for the operator-controlled npm publication workflow."""
+"""Contract tests for the GitHub Release workflow and package verification."""
 
 from __future__ import annotations
 
@@ -10,13 +10,15 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REDIS_HELPER = ROOT / "scripts" / "run-with-redis.sh"
 MONGODB_HELPER = ROOT / "scripts" / "run-with-mongodb.sh"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
-def test_root_justfile_has_safe_npm_release_recipes() -> None:
+def test_root_justfile_has_safe_release_recipes() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
     mise_config = (ROOT / ".mise.toml").read_text(encoding="utf-8")
 
@@ -24,27 +26,82 @@ def test_root_justfile_has_safe_npm_release_recipes() -> None:
     assert 'npm = "11.17.0"' in mise_config
     assert "install-npm-toolchain:" in justfile
     assert "mise install" in justfile
-    assert "verify-npm-release:" in justfile
-    assert "publish-npm:" in justfile
-    assert "verify-npm-release: install-npm-toolchain" in justfile
+    assert "verify-release:" in justfile
+    assert "verify-release: install-npm-toolchain" in justfile
     assert '"$node_path" "$npm_path" ci --no-audit --no-fund' in justfile
-    assert "assert-npm-publish-state: install-npm-toolchain" in justfile
-    assert "mise exec -- npm whoami" in justfile
-    assert "mise exec -- node scripts/verify-npm-package.mjs" in justfile
-    assert "mise exec -- npm publish --access public" in justfile
-    assert "\n    npm " not in justfile
-    assert " && npm " not in justfile
-    assert "\n    node " not in justfile
-    assert "git diff --quiet" in justfile
-    assert "refs/heads/main" in justfile
+    assert '"$node_path" ../scripts/verify-release-package.mjs' in justfile
     assert (
         'scripts/run-with-mongodb.sh ../scripts/run-with-redis.sh "$node_path" "$npm_path" test'
     ) in justfile
 
-    package_validator = (ROOT / "scripts" / "verify-npm-package.mjs").read_text(
-        encoding="utf-8"
-    )
-    assert "must be newer than the latest published version" in package_validator
+    assert "publish-npm" not in justfile
+    assert "assert-npm-publish-state" not in justfile
+    assert "npm publish" not in justfile
+    assert "npm whoami" not in justfile
+    assert "registry.npmjs.org" not in justfile
+
+
+def test_release_workflow_publishes_verified_github_tarball() -> None:
+    assert RELEASE_WORKFLOW.is_file()
+    workflow_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
+    assert isinstance(workflow, dict)
+
+    assert workflow["permissions"] == {"contents": "read"}
+
+    triggers = workflow["on"]
+    assert isinstance(triggers, dict)
+    assert "pull_request" not in triggers
+    push = triggers["push"]
+    assert isinstance(push, dict)
+    assert push["tags"] == ["v*"]
+
+    concurrency = workflow["concurrency"]
+    assert isinstance(concurrency, dict)
+    assert concurrency["cancel-in-progress"] == "false"
+
+    assert "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6" in workflow_text
+    assert "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7" in workflow_text
+    assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6" in workflow_text
+    assert "actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5" in workflow_text
+
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    release_job = jobs["release"]
+    assert isinstance(release_job, dict)
+    assert release_job["permissions"] == {"contents": "write"}
+
+    steps = release_job["steps"]
+    assert isinstance(steps, list)
+    step_names = {
+        step["name"]
+        for step in steps
+        if isinstance(step, dict) and "name" in step
+    }
+    assert {
+        "Pin npm",
+        "Verify toolchain",
+        "Verify tag matches package version",
+        "Security audit",
+        "Lint",
+        "TypeScript",
+        "Unit tests",
+        "Start integration services",
+        "Integration tests",
+        "Stop integration services",
+        "Browser tests",
+        "Build",
+        "Verify packed consumer",
+        "Verify release package",
+        "Pack release tarball",
+        "Publish GitHub Release",
+    } <= step_names
+
+    assert "verify-release-package.mjs" in workflow_text
+    assert "npm pack" in workflow_text
+    assert "gh release create" in workflow_text
+    assert "npm publish" not in workflow_text
+    assert "registry.npmjs.org" not in workflow_text
 
 
 def test_application_consumer_install_skips_implicit_network_checks() -> None:
@@ -210,6 +267,8 @@ esac
     ("mutation", "expected_error"),
     [
         (None, None),
+        ("not-private", "package must be marked private"),
+        ("has-publish-config", "publishConfig must not be configured"),
         ("missing-export", "export target is missing"),
         ("unexpected-file", "unexpected package file"),
         ("wrong-version", "package report version must match the manifest"),
@@ -219,13 +278,13 @@ def test_package_validator_checks_the_actual_pack_report(
     tmp_path: Path, mutation: str | None, expected_error: str | None
 ) -> None:
     """Exercise the shipped validator without publishing or contacting npm."""
-    script = tmp_path / "scripts/verify-npm-package.mjs"
+    script = tmp_path / "scripts/verify-release-package.mjs"
     package = tmp_path / "typeferry-ts"
     binaries = tmp_path / "bin"
 
     script.parent.mkdir()
     binaries.mkdir()
-    shutil.copyfile(ROOT / "scripts/verify-npm-package.mjs", script)
+    shutil.copyfile(ROOT / "scripts/verify-release-package.mjs", script)
 
     manifest: dict[str, object] = json.loads(
         (ROOT / "typeferry-ts/package.json").read_text(encoding="utf-8")
@@ -249,7 +308,16 @@ def test_package_validator_checks_the_actual_pack_report(
     report_files = [{"path": name} for name in files]
     report_version = manifest["version"]
 
-    if mutation == "missing-export":
+    if mutation == "not-private":
+        manifest.pop("private", None)
+        (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "has-publish-config":
+        manifest["publishConfig"] = {
+            "access": "public",
+            "registry": "https://registry.npmjs.org/",
+        }
+        (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "missing-export":
         manifest["exports"] = {"./client": "./dist/missing.js"}
         (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
     elif mutation == "unexpected-file":
@@ -299,11 +367,14 @@ def test_package_validator_checks_the_actual_pack_report(
         timeout=15,
     )
 
-    assert json.loads(call_path.read_text(encoding="utf-8")) == [
-        "pack",
-        "--dry-run",
-        "--json",
-    ]
+    if mutation in {"not-private", "has-publish-config"}:
+        assert not call_path.exists()
+    else:
+        assert json.loads(call_path.read_text(encoding="utf-8")) == [
+            "pack",
+            "--dry-run",
+            "--json",
+        ]
     if expected_error is None:
         assert result.returncode == 0, result.stderr
         assert f"Verified typeferry@{manifest['version']}" in result.stdout
@@ -312,33 +383,26 @@ def test_package_validator_checks_the_actual_pack_report(
         assert expected_error in result.stderr
 
 
-def test_package_and_template_locks_use_final_identity() -> None:
+def test_package_manifest_and_lock_guard_against_npm_publication() -> None:
     manifest = json.loads(
         (ROOT / "typeferry-ts/package.json").read_text(encoding="utf-8")
-    )
-    template_manifest = json.loads(
-        (ROOT / "template/package.json").read_text(encoding="utf-8")
     )
     package_lock = json.loads(
         (ROOT / "typeferry-ts/package-lock.json").read_text(encoding="utf-8")
     )
-    template_lock = json.loads(
-        (ROOT / "template/package-lock.json").read_text(encoding="utf-8")
-    )
 
+    assert manifest["name"] == "typeferry"
+    assert manifest["private"] is True
+    assert "publishConfig" not in manifest
+    assert (
+        manifest["repository"]["url"]
+        == "git+https://github.com/techstertech/typeferry.git"
+    )
     assert package_lock["name"] == "typeferry"
     assert package_lock["version"] == manifest["version"]
     assert package_lock["packages"][""]["name"] == "typeferry"
+    assert package_lock["packages"][""]["version"] == manifest["version"]
     assert package_lock["packages"][""]["engines"] == manifest["engines"]
-    assert (
-        template_lock["packages"][""]["dependencies"]["typeferry"]
-        == template_manifest["dependencies"]["typeferry"]
-    )
-    assert "node_modules/typeferry" in template_lock["packages"]
-    assert template_lock["packages"]["node_modules/typeferry"]["resolved"].startswith(
-        "https://registry.npmjs.org/typeferry/-/typeferry-"
-    )
-    assert "node_modules/typeferry-ts" not in template_lock["packages"]
 
 
 def test_active_code_has_no_temporary_package_imports() -> None:

@@ -9,8 +9,8 @@ wire protocol. Application developers should use the
 ## Summary
 
 TypeFerry simplifies application setup by keeping its established
-development, production-build, and test conventions into the existing
-`typeferry` npm package.
+development, production-build, and test conventions into the distributed
+`typeferry` release package.
 
 A conventional application does not need a TypeFerry configuration file.
 The framework understands the root-level `client/`, `common/`, `server/`,
@@ -307,10 +307,10 @@ The one-package choice increases installation weight for runtime-only
 consumers. The initial implementation accepts that tradeoff for simpler setup,
 while release inspection enforces separation between runtime and tooling code.
 
-The intended upgrade is ordinary npm behavior:
+The intended upgrade installs the target GitHub Release tarball:
 
 ```sh
-npm install typeferry@latest
+npm install https://github.com/techstertech/typeferry/releases/download/v<version>/typeferry-<version>.tgz
 npm test
 npm run build
 ```
