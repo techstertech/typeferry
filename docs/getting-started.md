@@ -20,9 +20,8 @@ mise install
 mise exec -- npm ci
 ```
 
-The template installs the published `typeferry` package from npm. Its lockfile
-pins the verified `0.8.0` artifact while the manifest accepts compatible
-`0.8.x` updates.
+The template installs the verified `typeferry` release tarball from GitHub Releases. Its lockfile
+pins the `v0.17.0` release archive (`typeferry-0.17.0.tgz`) and its integrity digest.
 
 ## 2. Start MongoDB
 

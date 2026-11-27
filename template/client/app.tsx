@@ -26,10 +26,10 @@ export function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
-  const ownerChannel = getOwnerChannel(client.context)
+  const ownerChannel = client ? getOwnerChannel(client.context) : ''
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!authenticated) return
+    if (!authenticated || !client) return
 
     setIsLoading(true)
     try {
@@ -63,7 +63,7 @@ export function App(): JSX.Element {
   ): Promise<void> => {
     event.preventDefault()
     const nextText = text.trim()
-    if (!nextText || isSaving) return
+    if (!client || !nextText || isSaving) return
 
     setIsSaving(true)
     try {
@@ -127,7 +127,7 @@ export function App(): JSX.Element {
             />
             <button
               className="cursor-pointer rounded-lg bg-blue-700 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!text.trim() || isSaving}
+              disabled={!client || !text.trim() || isSaving}
               type="submit"
             >
               {isSaving ? 'Saving…' : 'Send'}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -403,6 +404,30 @@ def test_package_manifest_and_lock_guard_against_npm_publication() -> None:
     assert package_lock["packages"][""]["name"] == "typeferry"
     assert package_lock["packages"][""]["version"] == manifest["version"]
     assert package_lock["packages"][""]["engines"] == manifest["engines"]
+
+
+def test_template_consumes_github_release_tarball() -> None:
+    template_manifest = json.loads(
+        (ROOT / "template/package.json").read_text(encoding="utf-8")
+    )
+    template_lock = json.loads(
+        (ROOT / "template/package-lock.json").read_text(encoding="utf-8")
+    )
+
+    tarball_url = template_manifest["dependencies"]["typeferry"]
+    assert re.fullmatch(
+        r"https://github\.com/techstertech/typeferry/releases/download/v\d+\.\d+\.\d+/typeferry-\d+\.\d+\.\d+\.tgz",
+        tarball_url,
+    )
+    assert (
+        template_lock["packages"][""]["dependencies"]["typeferry"] == tarball_url
+    )
+    assert "node_modules/typeferry" in template_lock["packages"]
+    installed = template_lock["packages"]["node_modules/typeferry"]
+    assert installed["resolved"] == tarball_url
+    assert not installed["resolved"].startswith("https://registry.npmjs.org/")
+    assert str(installed["integrity"]).startswith("sha512-")
+    assert "node_modules/typeferry-ts" not in template_lock["packages"]
 
 
 def test_active_code_has_no_temporary_package_imports() -> None:

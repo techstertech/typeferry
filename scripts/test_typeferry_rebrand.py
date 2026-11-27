@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tomllib
 import unittest
@@ -82,11 +83,19 @@ class TypeFerryRebrandTest(unittest.TestCase):
         package_json = json.loads(
             (REPO_ROOT / "template/package.json").read_text(encoding="utf-8")
         )
-
-        self.assertEqual(
-            PUBLIC_TYPESCRIPT_RANGE,
-            package_json["dependencies"][PUBLIC_TYPESCRIPT_NAME],
+        package_lock = json.loads(
+            (REPO_ROOT / "template/package-lock.json").read_text(encoding="utf-8")
         )
+        tarball_url = package_json["dependencies"][PUBLIC_TYPESCRIPT_NAME]
+
+        self.assertRegex(
+            tarball_url,
+            r"^https://github\.com/techstertech/typeferry/releases/download/v\d+\.\d+\.\d+/typeferry-\d+\.\d+\.\d+\.tgz$",
+        )
+        installed = package_lock["packages"]["node_modules/typeferry"]
+        self.assertEqual(tarball_url, installed["resolved"])
+        self.assertFalse(installed["resolved"].startswith("https://registry.npmjs.org/"))
+        self.assertTrue(str(installed["integrity"]).startswith("sha512-"))
 
 def _git(*arguments: str) -> str:
     result = subprocess.run(

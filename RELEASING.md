@@ -6,7 +6,7 @@ The TypeScript implementation (`typeferry-ts/`) is marked `"private": true` to p
 
 | Implementation | Distribution identity | Version | Status |
 |---|---|---|---|
-| TypeScript | [`techstertech/typeferry` GitHub Releases](https://github.com/techstertech/typeferry/releases) (`typeferry-<version>.tgz`) | `0.17.0` | Preparing `v0.17.0` GitHub Release; npm publication retired |
+| TypeScript | [`techstertech/typeferry` GitHub Releases](https://github.com/techstertech/typeferry/releases) (`typeferry-<version>.tgz`) | `0.17.0` | Published at [`v0.17.0`](https://github.com/techstertech/typeferry/releases/tag/v0.17.0); npm publication retired |
 | Python | `typeferry-py` | `0.2.0` | Temporary identity; publication disabled |
 | Rust | `typeferry` and `typeferry-*` | `0.2.0` | Workspace publication disabled |
 | Go | `github.com/leonardoventurini/typeferry/typeferry-go` | Untagged | Approved API; local and remote parity passed; no release tag |
@@ -41,6 +41,14 @@ adapter dependencies. MongoDB live views, a Go client and extra OAuth providers
 are outside the accepted shared server scope.
 
 ## TypeScript release
+
+### `v0.17.0` GitHub Release
+
+`v0.17.0` retires public npm publication and distributes the verified `typeferry-0.17.0.tgz` tarball via [GitHub Release `v0.17.0`](https://github.com/techstertech/typeferry/releases/tag/v0.17.0) on tag commit `ba1a420` (workflow run `45919420376`).
+
+- Tarball URL: `https://github.com/techstertech/typeferry/releases/download/v0.17.0/typeferry-0.17.0.tgz`
+- Size: `319,932` bytes
+- SHA-256: `f3a1435847efbbb2e0e673dec0b25b4dfaecdda503d47e536b7e3c719777dedc`
 
 ### Historical npm releases (`0.13.0` – `0.16.0`)
 
